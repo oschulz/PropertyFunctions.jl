@@ -47,10 +47,12 @@ instances of `PropertyFunction` directly - use the `@fp` macro instead.
 The type parameters of `PropertyFunction` are subject to change and not
 part of the public API of the PropertyFunctions package.
 """
-struct PropertyFunction{FK<:Function,FA<:Function} <: Function
-    kernel_func::FK
-    accessor_func::FA
+struct PropertyFunction{names, F<:Function} <: Function
+    sel_prop_func::F
 end
+
+PropertyFunction{names}(sel_prop_func::F) where {names,F<:Function} = PropertyFunction{names,F}(sel_prop_func)
+
 
 """
     @pf expression
@@ -93,15 +95,14 @@ macro pf(expr)
     props = collect(keys(argmap))
     args = [esc(argmap[p]) for p in props]
 
-    propacc = map(p -> :(obj.$p), props)
+    names_expr = :(())
+    append!(names_expr.args, map(QuoteNode, props))
 
     res_expr  = quote
-        local kernel_func
-        @inline kernel_func($(args...)) = $(esc(expr))
-        local accessor_func
-        @inline accessor_func(obj) = ($(propacc...),)
+        local sel_prop_func
+        @inline sel_prop_func($(args...)) = $(esc(expr))
 
-        PropertyFunction(kernel_func, accessor_func)
+        PropertyFunction{$names_expr}(sel_prop_func)
     end
 
     res_expr
@@ -109,11 +110,21 @@ end
 export @pf
 
 
-(pf::PropertyFunction)(x) = pf.kernel_func(pf.accessor_func(x)...)
+@generated function _prop_tuple(pf::PropertyFunction{names}, obj) where names
+    expr = :(())
+    for nm in names
+        push!(expr.args, :(obj.$nm))
+    end
+    return expr
+end
+
+
+(pf::PropertyFunction)(x) = pf.sel_prop_func(_prop_tuple(pf, x)...)
+
 
 # ToDo - necessary?
 #@inline (bpf::BroadcastFunction{<:PropertyFunction})(tbl) =
-#    broadcast(bpf.f.kernel_func, bpf.f.accessor_func(tbl)...)
+#    broadcast(bpf.f.sel_prop_func, _prop_tuple(bpf.f, tbl)...)
 
 _colaccess(xs) = Val(Tables.columnaccess(xs))
 
@@ -122,14 +133,14 @@ _colaccess(xs) = Val(Tables.columnaccess(xs))
 end
 
 @inline function _broadcasted_impl(::Val{true}, pf::PropertyFunction, xs::AbstractArray)
-    coltuple = pf.accessor_func(Tables.columns(xs))
-    bstyle = BroadcastStyle(typeof(StructArray(coltuple)))
-    Broadcast.broadcasted(bstyle, pf.kernel_func, pf.accessor_func(Tables.columns(xs))...)
+    cols = _prop_tuple(pf, Tables.columns(xs))
+    bstyle = BroadcastStyle(typeof(StructArray(cols)))
+    Broadcast.broadcasted(bstyle, pf.sel_prop_func, cols...)
 end
 
 @inline function _broadcasted_impl(::Val{false}, pf::PropertyFunction, xs::AbstractArray)
     # ToDo: Use StructArray broadcast style here as well.
-    Broadcast.broadcasted(x -> pf.kernel_func(pf.accessor_func(x)...), xs)
+    Broadcast.broadcasted(x -> pf.sel_prop_func(_prop_tuple(pf, x)...), xs)
 end
 
 # DoTo: Specialize broadcasting for Iterators.Flatten over objects with column access
@@ -138,7 +149,7 @@ end
 
 # Strided.StridedView offers automatic multithreaded operation.
 #@inline (bpf::BroadcastFunction{<:PropertyFunction})(::Type{StridedView}, tbl) =
-#    broadcast(bpf.f.kernel_func, map(StridedView, bpf.f.accessor_func(tbl))...)
+#    broadcast(bpf.f.sel_prop_func, map(StridedView, _prop_tuple(bpf.f, tbl))...)
 
 #@inline (bpf::BroadcastFunction{<:PropertyFunction})(::Type{LazyArray}, tbl) =
 #    LazyArray(Broadcast.broadcasted(bpf.f, tbl))
