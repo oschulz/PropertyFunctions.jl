@@ -4,23 +4,18 @@
 struct _SortBy{
     F,
     IdxAccF<:Union{typeof(getindex),typeof(view)},
-    SortAlg<:Base.Sort.Algorithm,
-    Ordr<:Base.Order.Ordering
 } <: Function
     f::F
     idxaccf::IdxAccF
-    alg::SortAlg
     rev::Bool
-    order::Ordr
 end
+
 
 """
     sortby(
         [getindex|view,]
         f;
-        alg::SortAlg = Base.DEFAULT_STABLE, 
         rev::Bool = false,
-        order::Ordr = Base.Order.Forward
     )
 
 Generates a function that sorts and array by `f`, returning either a copy
@@ -35,19 +30,19 @@ xs |> sortby(x -> (x - 0.5)^2)
 function sortby end
 export sortby
 
+# Note: Don't offer `alg` and `order`, as these kwargs don't seem to be supported by sort on GPU.
+
 sortby(
     accfunc::Union{typeof(getindex),typeof(view)},
     f;
-    alg::Base.Sort.Algorithm = Base.DEFAULT_STABLE, 
     rev::Bool = false,
-    order::Base.Order.Ordering = Base.Order.Forward
-) = _SortBy(f, accfunc, alg, rev, order)
+) = _SortBy(f, accfunc, rev)
 
 sortby(f; kwargs...) = sortby(getindex, f; kwargs...)
 
 
 @inline function (srt::_SortBy)(xs::Union{AbstractArray,Base.Broadcast.Broadcasted})
     key = srt.f.(xs)
-    idxs = sortperm(key, alg = srt.alg, rev = srt.rev, order = srt.order)
+    idxs = sortperm(key, rev = srt.rev)
     srt.idxaccf(xs, idxs)
 end
