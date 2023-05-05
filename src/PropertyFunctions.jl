@@ -7,7 +7,7 @@ Provides functionality for easy access to and efficient broadcasting over proper
 """
 module PropertyFunctions
 
-using Base.Broadcast: BroadcastFunction
+using Base.Broadcast: BroadcastFunction, BroadcastStyle
 
 import Tables
 import StructArrays
