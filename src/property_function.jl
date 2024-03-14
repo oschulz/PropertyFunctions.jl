@@ -39,6 +39,30 @@ end
 
 
 """
+    props2varsyms(expr)
+
+Replace `\$`-escaped properties in `expr` by generated variable names
+and return the original property names, new argument names and the modified
+expression.
+
+Usage:
+
+```julia
+props, vars, new_expr = props2varsyms(expr)
+```
+"""
+function props2varsyms(exr)
+    new_expr = deepcopy(exr)
+    argmap = subst_prop_refs!(new_expr)
+
+    props = collect(keys(argmap))
+    vars = [argmap[p] for p in props]
+
+    return props, vars, new_expr
+end
+
+
+"""
     struct PropertyFunction <: Function
 
 Use only for dispatch in special cases. User code should *not* create
@@ -90,22 +114,20 @@ xs |> filterby(@pf \$a + \$c^2 < 0.5)
 ```
 """
 macro pf(expr)
-    argmap = subst_prop_refs!(expr)
-
-    props = collect(keys(argmap))
-    args = [esc(argmap[p]) for p in props]
+    props, args, arg_expr = props2varsyms(expr)
+    esc_args = esc.(args)
 
     names_expr = :(())
     append!(names_expr.args, map(QuoteNode, props))
 
-    res_expr  = quote
+    res_expr = quote
         local sel_prop_func
-        @inline sel_prop_func($(args...)) = $(esc(expr))
+        @inline sel_prop_func($(esc_args...)) = $(esc(arg_expr))
 
         PropertyFunction{$names_expr}(sel_prop_func)
     end
 
-    res_expr
+    return res_expr
 end
 export @pf
 
