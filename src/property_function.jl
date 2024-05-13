@@ -78,6 +78,73 @@ export PropertyFunction
 
 PropertyFunction{names}(sel_prop_func::F) where {names,F<:Function} = PropertyFunction{names,F}(sel_prop_func)
 
+(pf::PropertyFunction)(x) = pf.sel_prop_func(_prop_tuple(pf, x)...)
+
+@generated function _prop_tuple(pf::PropertyFunction{names}, obj) where names
+    expr = :(())
+    for nm in names
+        push!(expr.args, :(obj.$nm))
+    end
+    return expr
+end
+
+
+
+struct _NamedTupleCtor{names} <: Function end
+(::_NamedTupleCtor{names})(xs...) where names = NamedTuple{names}(xs)
+
+"""
+    PropSelFunction{src_names,trg_names} <: PropertyFunction
+
+A special kind of `PropertyFunction` that selects (and possibly renames)
+properties, but does no other computations.
+
+A PropSelFunction can be constructed via the [`@pf`](@ref) macro
+
+```julia
+propsel = @pf (;\$c, d = \$a)
+```
+
+or directly via
+
+```julia
+propsel = PropSelFunction(:c, :a => :d)
+```
+
+or
+
+```julia
+propsel = PropSelFunction{(:c, :a), (:c, :d)}()
+```
+
+or just
+
+```julia
+PropSelFunction{(:c, :a)}()
+```
+
+if no property name mapping is required.
+
+See also [`@pf`](@ref).
+"""
+const PropSelFunction{src_names, trg_names} = PropertyFunctions.PropertyFunction{src_names, PropertyFunctions._NamedTupleCtor{trg_names}}
+export PropSelFunction
+
+PropSelFunction{src_names,trg_names}() where {src_names,trg_names} = PropertyFunction{src_names}(_NamedTupleCtor{trg_names}())
+PropSelFunction{src_names}() where {src_names} = PropSelFunction{src_names, src_names}()
+
+function PropSelFunction(selects::Union{Symbol,Pair{Symbol,Symbol}}...)
+    src_names = map(_propsel_src, selects)
+    trg_names = map(_propsel_trg, selects)
+    PropSelFunction{src_names, trg_names}()
+end
+
+_propsel_src(s::Symbol) = s
+_propsel_trg(s::Symbol) = s
+_propsel_src(src_trg::Pair{Symbol,Symbol}) = src_trg[1]
+_propsel_trg(src_trg::Pair{Symbol,Symbol}) = src_trg[2]
+
+
 
 """
     @pf expression
@@ -134,7 +201,7 @@ macro pf(expr)
     srcs_trgs = _get_property_selection(expr)
     if !isnothing(srcs_trgs)
         srcs, trgs = srcs_trgs
-        return :(PropertyFunction{$(Expr(:tuple, QuoteNode.(srcs)...))}(_ConstructNamedTuple{$(Expr(:tuple, QuoteNode.(trgs)...))}()))
+        return :(PropSelFunction{$(Expr(:tuple, QuoteNode.(srcs)...)), $(Expr(:tuple, QuoteNode.(trgs)...))}())
     else
         props, args, arg_expr = props2varsyms(expr)
         esc_args = esc.(args)
@@ -205,29 +272,6 @@ function _get_property_selection(expr::Expr)
     end
 end
 
-struct _ConstructNamedTuple{names} <: Function end
-(::_ConstructNamedTuple{names})(xs...) where names = NamedTuple{names}(xs)
-
-
-"""
-    PropSelFunction <: PropertyFunction
-
-A special kind of `PropertyFunction` that selects (and possibly renames)
-properties, but does no other computations.
-"""
-const PropSelFunction{src_names, trg_names} = PropertyFunctions.PropertyFunction{src_names, PropertyFunctions._ConstructNamedTuple{trg_names}}
-export PropSelFunction
-
-@generated function _prop_tuple(pf::PropertyFunction{names}, obj) where names
-    expr = :(())
-    for nm in names
-        push!(expr.args, :(obj.$nm))
-    end
-    return expr
-end
-
-
-(pf::PropertyFunction)(x) = pf.sel_prop_func(_prop_tuple(pf, x)...)
 
 
 # ToDo - necessary?

@@ -31,8 +31,12 @@ end
     f_nt_ref(x) = (apc = x.a + x.c, amc = x.a - x.c)
 
     f_propsel = @pf (;$b, c = $a)
-    @test f_propsel isa PropertyFunctions.PropSelFunction{(:b, :a), (:b, :c)}
     f_propsel_ref = x -> (b = x.b, c = x.a)
+    @test f_propsel isa PropSelFunction{(:b, :a), (:b, :c)}
+    @test f_propsel == PropSelFunction{(:b, :a), (:b, :c)}()
+    @test f_propsel == PropSelFunction(:b, :a => :c)
+    @test PropSelFunction{(:b, :a)}() == PropSelFunction{(:b, :a), (:b, :a)}()
+
 
     f_struct = @pf TestStruct($a + $c, $a - $c)
     f_struct_ref(x) = TestStruct(x.a + x.c, x.a - x.c)
@@ -63,7 +67,7 @@ end
             else
                 @test (broadcast(f, xs)) == f_ref.(xs)
             end
-            if f isa PropertyFunctions.PropSelFunction && xs isa StructArray
+            if f isa PropSelFunction && xs isa StructArray
                 @test @inferred(broadcasted(f, xs)) isa StructArray
             else
                 @test @inferred(broadcasted(f, xs)) isa Broadcast.Broadcasted
