@@ -74,6 +74,7 @@ part of the public API of the PropertyFunctions package.
 struct PropertyFunction{names, F<:Function} <: Function
     sel_prop_func::F
 end
+export PropertyFunction
 
 PropertyFunction{names}(sel_prop_func::F) where {names,F<:Function} = PropertyFunction{names,F}(sel_prop_func)
 
@@ -209,13 +210,13 @@ struct _ConstructNamedTuple{names} <: Function end
 
 
 """
-    PropertyFunctions.PropSelFunction{src_names, trg_names} <: PropertyFunctions.PropertyFunction
+    PropSelFunction <: PropertyFunction
 
 A special kind of `PropertyFunction` that selects (and possibly renames)
 properties, but does no other computations.
 """
 const PropSelFunction{src_names, trg_names} = PropertyFunctions.PropertyFunction{src_names, PropertyFunctions._ConstructNamedTuple{trg_names}}
-
+export PropSelFunction
 
 @generated function _prop_tuple(pf::PropertyFunction{names}, obj) where names
     expr = :(())
