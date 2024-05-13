@@ -106,6 +106,22 @@ example above. If the broadcasted function generates structs (including
 `NamedTuple`s), broadcasting specialization will try to return a
 `StructArrays.StructArray`.
 
+Property functions of the kind
+
+```julia
+propsel = @pf (;\$c, d = \$a)
+```
+
+Can be used to select (and rename) properties, and they have special
+broadcasting optimizations for table-like arguments. This can make
+broadcasts of such property selectors zero-copy O(1) operations:
+
+```
+new_xs = propsel.(xs)
+new_xs.c === xs.c
+new_xs.d === xs.a
+```
+
 `@pf` is also very handy in `sortby` and `filterby`:
 
 ```julia
@@ -114,22 +130,91 @@ xs |> filterby(@pf \$a + \$c^2 < 0.5)
 ```
 """
 macro pf(expr)
-    props, args, arg_expr = props2varsyms(expr)
-    esc_args = esc.(args)
+    srcs_trgs = _get_property_selection(expr)
+    if !isnothing(srcs_trgs)
+        srcs, trgs = srcs_trgs
+        return :(PropertyFunction{$(Expr(:tuple, QuoteNode.(srcs)...))}(_ConstructNamedTuple{$(Expr(:tuple, QuoteNode.(trgs)...))}()))
+    else
+        props, args, arg_expr = props2varsyms(expr)
+        esc_args = esc.(args)
 
-    names_expr = :(())
-    append!(names_expr.args, map(QuoteNode, props))
+        names_expr = :(())
+        append!(names_expr.args, map(QuoteNode, props))
 
-    res_expr = quote
-        local sel_prop_func
-        @inline sel_prop_func($(esc_args...)) = $(esc(arg_expr))
+        res_expr = quote
+            local sel_prop_func
+            @inline sel_prop_func($(esc_args...)) = $(esc(arg_expr))
 
-        PropertyFunction{$names_expr}(sel_prop_func)
+            PropertyFunction{$names_expr}(sel_prop_func)
+        end
+
+        return res_expr
     end
-
-    return res_expr
 end
 export @pf
+
+function _unpack_dollar_sym(expr::Expr)
+    if expr.head == :$ && length(expr.args) == 1
+        return only(expr.args)
+    else
+        return nothing
+    end
+end
+
+function _unpack_ntelem_assignment(expr::Expr)
+    if expr isa Expr && expr.head == :kw
+        src = _unpack_dollar_sym(expr.args[2])
+        if !isnothing(src)
+            return expr.args[1] => src
+        else
+            return nothing
+        end
+    else
+        src = _unpack_dollar_sym(expr)
+        if !isnothing(src)
+            return src => src
+        else
+            return nothing
+        end
+    end
+end
+
+_get_property_selection(::Any) = nothing
+function _get_property_selection(expr::Expr)
+    inputs = Symbol[]
+    output = Symbol[]
+    if expr.head == :tuple && length(expr.args) == 1
+        inner_expr = only(expr.args)
+        if inner_expr.head == :parameters
+            for arg in inner_expr.args
+                src_trg = _unpack_ntelem_assignment(arg)
+                if isnothing(src_trg)
+                    return nothing
+                else
+                    push!(output, src_trg[1])
+                    push!(inputs, src_trg[2])
+                end
+            end
+            return inputs => output
+        else
+            return nothing
+        end
+    else
+        return nothing
+    end
+end
+
+struct _ConstructNamedTuple{names} <: Function end
+(::_ConstructNamedTuple{names})(xs...) where names = NamedTuple{names}(xs)
+
+
+"""
+    PropertyFunctions.PropSelFunction{src_names, trg_names} <: PropertyFunctions.PropertyFunction
+
+A special kind of `PropertyFunction` that selects (and possibly renames)
+properties, but does no other computations.
+"""
+const PropSelFunction{src_names, trg_names} = PropertyFunctions.PropertyFunction{src_names, PropertyFunctions._ConstructNamedTuple{trg_names}}
 
 
 @generated function _prop_tuple(pf::PropertyFunction{names}, obj) where names
@@ -158,6 +243,13 @@ end
     cols = _prop_tuple(pf, Tables.columns(xs))
     bstyle = BroadcastStyle(typeof(StructArray(cols)))
     Broadcast.broadcasted(bstyle, pf.sel_prop_func, cols...)
+end
+
+@inline function _broadcasted_impl(::Val{true}, pf::PropSelFunction{src_names,trg_names}, xs::AbstractArray) where {src_names,trg_names}
+    cols = _prop_tuple(pf, Tables.columns(xs))
+    named_cols = NamedTuple{trg_names}(cols)
+    ctor = Tables.materializer(xs)
+    return ctor(named_cols)
 end
 
 @inline function _broadcasted_impl(::Val{false}, pf::PropertyFunction, xs::AbstractArray)
