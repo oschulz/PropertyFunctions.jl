@@ -3,6 +3,8 @@
 using PropertyFunctions
 using Test
 
+using Base.Broadcast: broadcasted
+
 
 @testset "filterby" begin
     xs = [0.9, 0.1, 0.9, 0.2, 0.7, 0.0, 0.7, 0.5, 0.2, 0.6]
@@ -15,4 +17,9 @@ using Test
     @test xs |> filterby(x -> x < 0.5) == ref_ys
     @test xs |> filterby(getindex, x -> x < 0.5) == ref_ys
     @test xs |> filterby(view, x -> x < 0.5) == ref_ys
+
+    bc = broadcasted(-, xs, 0.2)
+    ref_bc_ys = filter(x -> x < 0.3, xs .- 0.2)
+    @test @inferred(bc |> filterby(x -> x < 0.3)) == ref_bc_ys
+    @test @inferred(bc |> filterby(view, x -> x < 0.3)) == ref_bc_ys
 end

@@ -3,6 +3,8 @@
 using PropertyFunctions
 using Test
 
+using Base.Broadcast: broadcasted
+
 
 @testset "sortby" begin
     xs = [0.9, 0.1, 0.9, 0.2, 0.7, 0.0, 0.7, 0.5, 0.2, 0.6]
@@ -15,4 +17,13 @@ using Test
     @test xs |> sortby(x -> (x - 0.5)^2) == ref_ys
     @test xs |> sortby(getindex, x -> (x - 0.5)^2) == ref_ys
     @test xs |> sortby(view, x -> (x - 0.5)^2) == ref_ys
+
+    ref_rev_ys = sort(xs, by = x -> (x - 0.5)^2, rev = true)
+    @test xs |> sortby(x -> (x - 0.5)^2, rev = true) == ref_rev_ys
+    @test xs |> sortby(view, x -> (x - 0.5)^2, rev = true) == ref_rev_ys
+
+    bc = broadcasted(-, xs, 0.2)
+    ref_bc_ys = sort(xs .- 0.2, by = x -> (x - 0.5)^2)
+    @test @inferred(bc |> sortby(x -> (x - 0.5)^2)) == ref_bc_ys
+    @test @inferred(bc |> sortby(view, x -> (x - 0.5)^2)) == ref_bc_ys
 end
