@@ -21,6 +21,10 @@ end
 Generates a function that sorts an array by `f`, returning either a copy
 (default) or a view (ignored if the object does not support views).
 
+The generated function also accepts unmaterialized broadcasts
+(`Base.Broadcast.Broadcasted`) and evaluates `f` on them in a fused
+fashion.
+
 Example:
 ```julia
 xs = [0.9, 0.1, 0.9, 0.2, 0.7, 0.0, 0.7, 0.5, 0.2, 0.6]
