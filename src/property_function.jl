@@ -365,6 +365,14 @@ end
     Broadcast.broadcasted(x -> pf.sel_prop_func(_prop_tuple(pf, x)...), xs)
 end
 
+# Wider signatures would be ambiguous with Base and LinearAlgebra methods;
+# other array shapes fall back to the generic Base implementations:
+Base.map(pf::PropertyFunction, xs::AbstractVector) = broadcast(pf, xs)
+Base.filter(pf::PropertyFunction, xs::AbstractVector) = filterby(pf)(xs)
+Base.filter(pf::PropertyFunction, xs::Vector) = filterby(pf)(xs)
+Base.filter(pf::PropertyFunction, xs::BitVector) = filterby(pf)(xs)
+
+
 # ToDo: Specialize broadcasting for Iterators.Flatten over objects with column access
 
 # ToDo - possible extensions:

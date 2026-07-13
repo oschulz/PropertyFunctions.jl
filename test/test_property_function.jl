@@ -78,7 +78,13 @@ end
 
         @test filterby(x -> x < 0.5)(broadcasted(f_real, xs)) == filter(x -> x < 0.5, f_real_ref.(xs))
         @test sortby(identity)(broadcasted(f_real, xs)) == sort(f_real_ref.(xs))
+
+        @test @inferred(map(f_real, xs)) == map(f_real_ref, xs)
+        @test map(f_nt, xs) == map(f_nt_ref, xs)
+        @test @inferred(filter(f_bool, xs)) == filter(f_bool_ref, xs)
     end
+    @test map(f_nt, xs_sa) isa StructArray
+    @test map(f_propsel, xs_sa).b === xs_sa.b
 end
 
 
