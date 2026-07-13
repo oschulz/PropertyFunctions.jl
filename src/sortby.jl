@@ -44,5 +44,5 @@ sortby(f; kwargs...) = sortby(getindex, f; kwargs...)
 @inline function (srt::_SortBy)(xs::Union{AbstractArray,Base.Broadcast.Broadcasted})
     key = srt.f.(xs)
     idxs = sortperm(key, rev = srt.rev)
-    srt.idxaccf(xs, idxs)
+    srt.idxaccf(Broadcast.materialize(xs), idxs)
 end

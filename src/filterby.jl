@@ -34,5 +34,6 @@ filterby(f) = filterby(getindex, f)
 
 
 function(flt::_FilterBy)(xs::Union{AbstractArray,Base.Broadcast.Broadcasted})
-    flt.idxaccf(xs, flt.f.(xs)::AbstractArray{Bool})
+    sel = flt.f.(xs)::AbstractArray{Bool}
+    flt.idxaccf(Broadcast.materialize(xs), sel)
 end
