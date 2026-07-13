@@ -6,11 +6,19 @@ const _PropRef = Union{Symbol, Tuple{Vararg{Symbol}}}
 
 _propref(path::Tuple{Vararg{Symbol}}) = length(path) == 1 ? only(path) : path
 
-_ref_name(name::Symbol) = name
-_ref_name(path::Tuple) = Symbol(join(path, "."))
+_ref_head(name::Symbol) = name
+_ref_head(path::Tuple) = first(path)
 
 _ref_trgname(name::Symbol) = name
 _ref_trgname(path::Tuple) = last(path)
+
+_is_prefix_of(::_PropRef, ::Symbol) = false
+_is_prefix_of(a::Symbol, b::Tuple) = first(b) === a
+_is_prefix_of(a::Tuple, b::Tuple) = length(a) < length(b) && a === b[1:length(a)]
+
+# Drop references that are covered by a reference to a parent property:
+_merge_proprefs(refs::Vector{_PropRef}) =
+    filter(ref -> !any(other -> _is_prefix_of(other, ref), refs), refs)
 
 
 # Property path of expressions like `a.b.c`:
@@ -39,29 +47,36 @@ function _dollar_path(expr::Expr)
 end
 
 
+"""
+    subst_prop_refs(expr)
+
+Replace `\$`-escaped property references in `expr` by property accesses on a
+generated argument name and return the referenced properties, the argument
+name and the modified expression.
+
+Usage:
+
+```julia
+props, argsym, new_expr = subst_prop_refs(expr)
+```
+"""
+function subst_prop_refs(expr)
+    refs = _PropRef[]  # referenced properties, in order of first use
+    argsym = gensym(:x)
+    new_expr = subst_prop_refs_helper(deepcopy(expr), false, refs, argsym) # Start out _not_ in a quote context (false)
+    return _merge_proprefs(refs), argsym, new_expr
+end
+
 # Modeled after Base.Base._lift_one_interp!:
-function subst_prop_refs!(e)
-    argmap = Pair{_PropRef,Symbol}[]  # maps property references to gensymed arguments, in order of first use
-    subst_prop_refs_helper(e, false, argmap) # Start out _not_ in a quote context (false)
-    argmap
-end
+subst_prop_refs_helper(v, _, _, _) = v
 
-function _get_argsym!(argmap::Vector{Pair{_PropRef,Symbol}}, propref::_PropRef)
-    i = findfirst(entry -> entry.first == propref, argmap)
-    if isnothing(i)
-        push!(argmap, propref => gensym(_ref_name(propref)))
-        i = lastindex(argmap)
-    end
-    argmap[i].second
-end
-
-subst_prop_refs_helper(v, _, _) = v
-
-function subst_prop_refs_helper(expr::Expr, in_quote_context, argmap)
+function subst_prop_refs_helper(expr::Expr, in_quote_context, refs, argsym)
     if !in_quote_context
         path = _dollar_path(expr)
         if !isnothing(path)
-            return _get_argsym!(argmap, _propref(path))
+            ref = _propref(path)
+            ref in refs || push!(refs, ref)
+            return _getprop_expr(argsym, ref)
         end
     end
     if expr.head === :$
@@ -78,41 +93,15 @@ function subst_prop_refs_helper(expr::Expr, in_quote_context, argmap)
     end
     in_params = expr.head === :parameters
     for (i,e) in enumerate(expr.args)
-        new_e = subst_prop_refs_helper(e, in_quote_context, argmap)
-        if in_params && new_e isa Symbol && e isa Expr
-            path = _dollar_path(e)
-            if !isnothing(path)
-                # Preserve the property name of `$prop` in named-tuple/kwarg shorthand position:
-                new_e = Expr(:kw, last(path), new_e)
-            end
+        path = in_quote_context ? nothing : _dollar_path(e)
+        new_e = subst_prop_refs_helper(e, in_quote_context, refs, argsym)
+        if in_params && !isnothing(path)
+            # Preserve the property name of `$prop` in named-tuple/kwarg shorthand position:
+            new_e = Expr(:kw, last(path), new_e)
         end
         expr.args[i] = new_e
     end
     expr
-end
-
-
-"""
-    props2varsyms(expr)
-
-Replace `\$`-escaped properties in `expr` by generated variable names
-and return the original property names, new argument names and the modified
-expression.
-
-Usage:
-
-```julia
-props, vars, new_expr = props2varsyms(expr)
-```
-"""
-function props2varsyms(exr)
-    new_expr = deepcopy(exr)
-    argmap = subst_prop_refs!(new_expr)
-
-    props = [entry.first for entry in argmap]
-    vars = [entry.second for entry in argmap]
-
-    return props, vars, new_expr
 end
 
 
@@ -133,18 +122,10 @@ export PropertyFunction
 
 PropertyFunction{names}(sel_prop_func::F) where {names,F<:Function} = PropertyFunction{names,F}(sel_prop_func)
 
-(pf::PropertyFunction)(x) = pf.sel_prop_func(_prop_tuple(pf, x)...)
+(pf::PropertyFunction)(x) = pf.sel_prop_func(x)
 
 _getprop_expr(base, name::Symbol) = Expr(:., base, QuoteNode(name))
 _getprop_expr(base, path::Tuple) = foldl((e, name) -> Expr(:., e, QuoteNode(name)), path, init = base)
-
-@generated function _prop_tuple(pf::PropertyFunction{names}, obj) where names
-    expr = :(())
-    for ref in names
-        push!(expr.args, _getprop_expr(:obj, ref))
-    end
-    return expr
-end
 
 
 """
@@ -177,9 +158,48 @@ end
 end
 
 
+# Broadcast kernel that assembles the referenced properties into a (possibly
+# nested) NamedTuple and passes it to the wrapped function as a single argument:
+struct _PropsNTKernel{names,F<:Function} <: Function
+    sel_prop_func::F
+end
 
-struct _NamedTupleCtor{names} <: Function end
-(::_NamedTupleCtor{names})(xs...) where names = NamedTuple{names}(xs)
+_PropsNTKernel(pf::PropertyFunction{names,F}) where {names,F} = _PropsNTKernel{names,F}(pf.sel_prop_func)
+
+@inline (k::_PropsNTKernel)(args...) = k.sel_prop_func(_props_nt(k, args))
+
+function _props_nt_expr(refs::Vector, argexprs::Vector)
+    ks = Symbol[]
+    vs = Any[]
+    for ref in refs
+        head = _ref_head(ref)
+        head in ks && continue
+        push!(ks, head)
+        idxs = findall(r -> _ref_head(r) === head, refs)
+        if length(idxs) == 1 && refs[only(idxs)] isa Symbol
+            push!(vs, argexprs[only(idxs)])
+        else
+            subrefs = Any[_propref(Base.tail(refs[i]::Tuple{Vararg{Symbol}})) for i in idxs]
+            push!(vs, _props_nt_expr(subrefs, argexprs[idxs]))
+        end
+    end
+    return :(NamedTuple{$(QuoteNode((ks...,)))}(($(vs...),)))
+end
+
+@generated function _props_nt(k::_PropsNTKernel{names}, args::Tuple) where names
+    refs = Any[names...]
+    argexprs = Any[:(args[$i]) for i in eachindex(refs)]
+    return _props_nt_expr(refs, argexprs)
+end
+
+
+
+struct _PropSelector{src_names, trg_names} <: Function end
+
+@generated function (::_PropSelector{src_names,trg_names})(x) where {src_names,trg_names}
+    vals = Any[_getprop_expr(:x, ref) for ref in src_names]
+    return :(NamedTuple{$(QuoteNode(trg_names))}(($(vals...),)))
+end
 
 """
     PropSelFunction{src_names,trg_names} <: PropertyFunction
@@ -218,10 +238,10 @@ Source names may also be paths of nested property names, e.g. in
 
 See also [`@pf`](@ref).
 """
-const PropSelFunction{src_names, trg_names} = PropertyFunctions.PropertyFunction{src_names, PropertyFunctions._NamedTupleCtor{trg_names}}
+const PropSelFunction{src_names, trg_names} = PropertyFunctions.PropertyFunction{src_names, PropertyFunctions._PropSelector{src_names, trg_names}}
 export PropSelFunction
 
-PropSelFunction{src_names,trg_names}() where {src_names,trg_names} = PropertyFunction{src_names}(_NamedTupleCtor{trg_names}())
+PropSelFunction{src_names,trg_names}() where {src_names,trg_names} = PropertyFunction{src_names}(_PropSelector{src_names,trg_names}())
 PropSelFunction{src_names}() where {src_names} = PropSelFunction{src_names, src_names}()
 
 function PropSelFunction(selects::Union{Symbol,Pair{Symbol,Symbol}}...)
@@ -303,15 +323,14 @@ function _pf_impl(expr)
         srcs, trgs = srcs_trgs
         return :(PropSelFunction{$(Expr(:tuple, QuoteNode.(srcs)...)), $(Expr(:tuple, QuoteNode.(trgs)...))}())
     else
-        props, args, arg_expr = props2varsyms(expr)
-        esc_args = esc.(args)
+        props, argsym, arg_expr = subst_prop_refs(expr)
 
         names_expr = :(())
         append!(names_expr.args, map(QuoteNode, props))
 
         res_expr = quote
             local sel_prop_func
-            @inline sel_prop_func($(esc_args...)) = $(esc(arg_expr))
+            @inline sel_prop_func($(esc(argsym))) = $(esc(arg_expr))
 
             PropertyFunction{$names_expr}(sel_prop_func)
         end
@@ -415,7 +434,7 @@ end
 
 # ToDo - necessary?
 #@inline (bpf::BroadcastFunction{<:PropertyFunction})(tbl) =
-#    broadcast(bpf.f.sel_prop_func, _prop_tuple(bpf.f, tbl)...)
+#    broadcast(_PropsNTKernel(bpf.f), _prop_cols(bpf.f, Tables.columns(tbl))...)
 
 _colaccess(xs) = Val(Tables.columnaccess(xs))
 
@@ -430,7 +449,7 @@ end
 @inline function _broadcasted_impl(::Val{true}, pf::PropertyFunction, xs::AbstractArray)
     cols = _prop_cols(pf, Tables.columns(xs))
     bstyle = BroadcastStyle(typeof(StructArray(cols)))
-    Broadcast.broadcasted(bstyle, pf.sel_prop_func, cols...)
+    Broadcast.broadcasted(bstyle, _PropsNTKernel(pf), cols...)
 end
 
 @inline function _broadcasted_impl(::Val{true}, pf::PropSelFunction{src_names,trg_names}, xs::AbstractArray) where {src_names,trg_names}
@@ -442,7 +461,7 @@ end
 
 @inline function _broadcasted_impl(::Val{false}, pf::PropertyFunction, xs::AbstractArray)
     # ToDo: Use StructArray broadcast style here as well.
-    Broadcast.broadcasted(x -> pf.sel_prop_func(_prop_tuple(pf, x)...), xs)
+    Broadcast.broadcasted(pf.sel_prop_func, xs)
 end
 
 # Wider signatures would be ambiguous with Base and LinearAlgebra methods;
@@ -459,7 +478,7 @@ Base.filter(pf::PropertyFunction, xs::BitVector) = filterby(pf)(xs)
 
 # Strided.StridedView offers automatic multithreaded operation.
 #@inline (bpf::BroadcastFunction{<:PropertyFunction})(::Type{StridedView}, tbl) =
-#    broadcast(bpf.f.sel_prop_func, map(StridedView, _prop_tuple(bpf.f, tbl))...)
+#    broadcast(_PropsNTKernel(bpf.f), map(StridedView, _prop_cols(bpf.f, Tables.columns(tbl)))...)
 
 #@inline (bpf::BroadcastFunction{<:PropertyFunction})(::Type{LazyArray}, tbl) =
 #    LazyArray(Broadcast.broadcasted(bpf.f, tbl))

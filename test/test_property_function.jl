@@ -164,6 +164,11 @@ end
 
     @test PropertyFunctions.subcolumn(xs.a, :b) === xs.a.b
     @test PropertyFunctions.subcolumn([(b = 1,), (b = 2,)], :b) == [1, 2]
+
+    f_overlap = @pf ($a.b, $a)
+    @test f_overlap isa PropertyFunction{(:a,)}
+    @test @inferred(f_overlap(x)) == (x.a.b, x.a)
+    @test @inferred(broadcast(f_overlap, xs)) == [(xi.a.b, xi.a) for xi in xs]
 end
 
 
