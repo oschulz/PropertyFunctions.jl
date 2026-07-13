@@ -1,17 +1,55 @@
 # This file is a part of PropertyFunctions.jl, licensed under the MIT License (MIT).
 
 
+# A property reference: a property name or a path of nested property names.
+const _PropRef = Union{Symbol, Tuple{Vararg{Symbol}}}
+
+_propref(path::Tuple{Vararg{Symbol}}) = length(path) == 1 ? only(path) : path
+
+_ref_name(name::Symbol) = name
+_ref_name(path::Tuple) = Symbol(join(path, "."))
+
+_ref_trgname(name::Symbol) = name
+_ref_trgname(path::Tuple) = last(path)
+
+
+# Property path of expressions like `a.b.c`:
+_sym_path(sym::Symbol) = (sym,)
+_sym_path(::Any) = nothing
+function _sym_path(expr::Expr)
+    if expr.head === :. && length(expr.args) == 2 && expr.args[2] isa QuoteNode && expr.args[2].value isa Symbol
+        base = _sym_path(expr.args[1])
+        isnothing(base) ? nothing : (base..., expr.args[2].value::Symbol)
+    else
+        nothing
+    end
+end
+
+# Property path of expressions like `$a.b.c` and `$(a.b.c)`:
+_dollar_path(::Any) = nothing
+function _dollar_path(expr::Expr)
+    if expr.head === :$ && length(expr.args) == 1
+        _sym_path(only(expr.args))
+    elseif expr.head === :. && length(expr.args) == 2 && expr.args[2] isa QuoteNode && expr.args[2].value isa Symbol
+        base = _dollar_path(expr.args[1])
+        isnothing(base) ? nothing : (base..., expr.args[2].value::Symbol)
+    else
+        nothing
+    end
+end
+
+
 # Modeled after Base.Base._lift_one_interp!:
 function subst_prop_refs!(e)
-    argmap = Pair{Symbol,Symbol}[]  # maps property names to gensymed arguments, in order of first use
+    argmap = Pair{_PropRef,Symbol}[]  # maps property references to gensymed arguments, in order of first use
     subst_prop_refs_helper(e, false, argmap) # Start out _not_ in a quote context (false)
     argmap
 end
 
-function _get_argsym!(argmap::Vector{Pair{Symbol,Symbol}}, propname::Symbol)
-    i = findfirst(entry -> entry.first === propname, argmap)
+function _get_argsym!(argmap::Vector{Pair{_PropRef,Symbol}}, propref::_PropRef)
+    i = findfirst(entry -> entry.first == propref, argmap)
     if isnothing(i)
-        push!(argmap, propname => gensym(propname))
+        push!(argmap, propref => gensym(_ref_name(propref)))
         i = lastindex(argmap)
     end
     argmap[i].second
@@ -20,17 +58,18 @@ end
 subst_prop_refs_helper(v, _, _) = v
 
 function subst_prop_refs_helper(expr::Expr, in_quote_context, argmap)
+    if !in_quote_context
+        path = _dollar_path(expr)
+        if !isnothing(path)
+            return _get_argsym!(argmap, _propref(path))
+        end
+    end
     if expr.head === :$
         if in_quote_context  # This $ is simply interpolating out of the quote
             # Now, we're out of the quote, so any _further_ $ is ours.
             in_quote_context = false
         else
-            propname = expr.args[1]
-            if propname isa Symbol
-                return _get_argsym!(argmap, propname)
-            else
-                throw(ArgumentError("Properties referenced via \$... must be symbols"))
-            end
+            throw(ArgumentError("Properties referenced via \$... must be symbols or property paths like \$(a.b.c)"))
         end
     elseif expr.head === :quote
         in_quote_context = true   # Don't try to lift $ directly out of quotes
@@ -40,9 +79,12 @@ function subst_prop_refs_helper(expr::Expr, in_quote_context, argmap)
     in_params = expr.head === :parameters
     for (i,e) in enumerate(expr.args)
         new_e = subst_prop_refs_helper(e, in_quote_context, argmap)
-        if in_params && new_e isa Symbol && e isa Expr && e.head === :$
-            # Preserve the property name of `$prop` in named-tuple/kwarg shorthand position:
-            new_e = Expr(:kw, only(e.args)::Symbol, new_e)
+        if in_params && new_e isa Symbol && e isa Expr
+            path = _dollar_path(e)
+            if !isnothing(path)
+                # Preserve the property name of `$prop` in named-tuple/kwarg shorthand position:
+                new_e = Expr(:kw, last(path), new_e)
+            end
         end
         expr.args[i] = new_e
     end
@@ -93,10 +135,43 @@ PropertyFunction{names}(sel_prop_func::F) where {names,F<:Function} = PropertyFu
 
 (pf::PropertyFunction)(x) = pf.sel_prop_func(_prop_tuple(pf, x)...)
 
+_getprop_expr(base, name::Symbol) = Expr(:., base, QuoteNode(name))
+_getprop_expr(base, path::Tuple) = foldl((e, name) -> Expr(:., e, QuoteNode(name)), path, init = base)
+
 @generated function _prop_tuple(pf::PropertyFunction{names}, obj) where names
     expr = :(())
-    for nm in names
-        push!(expr.args, :(obj.$nm))
+    for ref in names
+        push!(expr.args, _getprop_expr(:obj, ref))
+    end
+    return expr
+end
+
+
+"""
+    PropertyFunctions.subcolumn(col::AbstractArray, name::Symbol)
+
+Get the column `name` of an array `col` of structs.
+
+Returns `getproperty.(col, name)` by default, `StructArray` columns
+provide zero-copy access. Specialize for array types that support
+efficient column access.
+"""
+@inline subcolumn(col::AbstractArray, name::Symbol) = getproperty.(col, name)
+@inline subcolumn(col::StructArray, name::Symbol) = getproperty(col, name)
+
+_getcol_expr(base, name::Symbol) = Expr(:., base, QuoteNode(name))
+function _getcol_expr(base, path::Tuple)
+    ref = Expr(:., base, QuoteNode(first(path)))
+    for name in Base.tail(path)
+        ref = :(subcolumn($ref, $(QuoteNode(name))))
+    end
+    return ref
+end
+
+@generated function _prop_cols(pf::PropertyFunction{names}, cols) where names
+    expr = :(())
+    for ref in names
+        push!(expr.args, _getcol_expr(:cols, ref))
     end
     return expr
 end
@@ -138,6 +213,9 @@ PropSelFunction{(:c, :a)}()
 
 if no property name mapping is required.
 
+Source names may also be paths of nested property names, e.g. in
+`@pf (;\$(a.b))`.
+
 See also [`@pf`](@ref).
 """
 const PropSelFunction{src_names, trg_names} = PropertyFunctions.PropertyFunction{src_names, PropertyFunctions._NamedTupleCtor{trg_names}}
@@ -166,6 +244,10 @@ Generates a function that accesses the properties of its argument
 referenced via `\$property` in `expression`.
 
 `@pf(\$a + \$c^2)` is equivalent to `x -> x.a + x.c^2`.
+
+Nested properties can be referenced via `\$a.b.c` or `\$(a.b.c)`, and
+broadcasting will read only the required nested columns (see
+[`PropertyFunctions.subcolumn`](@ref)).
 
 Examples:
 
@@ -250,6 +332,8 @@ properties.
 
 `@fp(a + f(b) + \$c)` is equivalent to `@pf(\$a + f(\$b) + c)`.
 
+Nested properties are referenced via plain `a.b.c` chains.
+
 Note that functions passed as *arguments* are in value position and so
 must be `\$`-escaped: `@fp foldl(\$+, a)`.
 """
@@ -278,28 +362,24 @@ function _flip_dollars(expr::Expr)
     end
 end
 
-_unpack_dollar_sym(::Any) = nothing
-function _unpack_dollar_sym(expr::Expr)
-    if expr.head == :$ && length(expr.args) == 1 && only(expr.args) isa Symbol
-        return only(expr.args)::Symbol
-    else
-        return nothing
-    end
+function _unpack_dollar_ref(expr)
+    path = _dollar_path(expr)
+    isnothing(path) ? nothing : _propref(path)
 end
 
 _unpack_ntelem_assignment(::Any) = nothing
 function _unpack_ntelem_assignment(expr::Expr)
     if expr.head == :kw
-        src = _unpack_dollar_sym(expr.args[2])
-        if !isnothing(src)
-            return expr.args[1] => src
+        src = _unpack_dollar_ref(expr.args[2])
+        if !isnothing(src) && expr.args[1] isa Symbol
+            return expr.args[1]::Symbol => src
         else
             return nothing
         end
     else
-        src = _unpack_dollar_sym(expr)
+        src = _unpack_dollar_ref(expr)
         if !isnothing(src)
-            return src => src
+            return _ref_trgname(src) => src
         else
             return nothing
         end
@@ -308,7 +388,7 @@ end
 
 _get_property_selection(::Any) = nothing
 function _get_property_selection(expr::Expr)
-    inputs = Symbol[]
+    inputs = _PropRef[]
     output = Symbol[]
     if expr.head == :tuple && length(expr.args) == 1
         inner_expr = only(expr.args)
@@ -348,13 +428,13 @@ end
     _broadcasted_impl(Val(false), pf, xs)
 
 @inline function _broadcasted_impl(::Val{true}, pf::PropertyFunction, xs::AbstractArray)
-    cols = _prop_tuple(pf, Tables.columns(xs))
+    cols = _prop_cols(pf, Tables.columns(xs))
     bstyle = BroadcastStyle(typeof(StructArray(cols)))
     Broadcast.broadcasted(bstyle, pf.sel_prop_func, cols...)
 end
 
 @inline function _broadcasted_impl(::Val{true}, pf::PropSelFunction{src_names,trg_names}, xs::AbstractArray) where {src_names,trg_names}
-    cols = _prop_tuple(pf, Tables.columns(xs))
+    cols = _prop_cols(pf, Tables.columns(xs))
     named_cols = NamedTuple{trg_names}(cols)
     ctor = Tables.materializer(xs)
     return ctor(named_cols)

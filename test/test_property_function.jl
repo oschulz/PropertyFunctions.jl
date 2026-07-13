@@ -125,11 +125,45 @@ end
     f_macrocall = @pf ($a, raw"$b")
     @test f_macrocall(x) == (1, raw"$b")
 
-    for bad_expr in [raw"@pf $(a.b)", raw"@pf (; c = $(a.b))", raw"@pf (; $(a.b))"]
+    for bad_expr in [raw"@pf $1", raw"@pf $(a[1])", raw"@pf $(f(x))", raw"@pf (; c = $(a[1]))", raw"@pf (; $(f(x)))"]
         err = try macroexpand(@__MODULE__, Meta.parse(bad_expr)) catch e; e; end
         err isa LoadError && (err = err.error)
         @test err isa ArgumentError
     end
+end
+
+
+@testset "nested properties" begin
+    inner = StructArrays.StructArray((b = [1.0, 2.0, 3.0], c = [4.0, 5.0, 6.0]))
+    xs = StructArrays.StructArray((a = inner, d = [7.0, 8.0, 9.0]))
+    x = xs[1]
+
+    f_chain = @pf $a.b + $d
+    @test f_chain isa PropertyFunction{((:a, :b), :d)}
+    @test @inferred(f_chain(x)) == x.a.b + x.d
+    @test @inferred(broadcast(f_chain, xs)) == xs.a.b .+ xs.d
+
+    f_parens = @pf $(a.c) * 2
+    @test f_parens isa PropertyFunction{((:a, :c),)}
+    @test @inferred(f_parens(x)) == x.a.c * 2
+    @test @inferred(broadcast(f_parens, xs)) == xs.a.c .* 2
+
+    f_fp_chain = @fp a.b + d
+    @test f_fp_chain isa PropertyFunction{((:a, :b), :d)}
+    @test f_fp_chain(x) == x.a.b + x.d
+
+    f_nestsel = @pf (;$(a.b), e = $a.c)
+    @test f_nestsel isa PropSelFunction{((:a, :b), (:a, :c)), (:b, :e)}
+    @test @inferred(f_nestsel(x)) == (b = x.a.b, e = x.a.c)
+    @test f_nestsel.(xs).b === xs.a.b
+    @test f_nestsel.(xs).e === xs.a.c
+
+    ys = StructArrays.StructArray((a = [(b = 1, c = 2), (b = 3, c = 4)], d = [5, 6]))
+    @test @inferred(broadcast(@pf($a.b + $d), ys)) == [6, 9]
+    @test @inferred((@pf $a.b + $d)(ys[1])) == 6
+
+    @test PropertyFunctions.subcolumn(xs.a, :b) === xs.a.b
+    @test PropertyFunctions.subcolumn([(b = 1,), (b = 2,)], :b) == [1, 2]
 end
 
 
