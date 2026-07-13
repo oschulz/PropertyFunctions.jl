@@ -16,6 +16,7 @@ using StructArrays: StructArray
 
 include("filterby.jl")
 include("sortby.jl")
+include("innermerge.jl")
 include("property_function.jl")
 
 end # module
