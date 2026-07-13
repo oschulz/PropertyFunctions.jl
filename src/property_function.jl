@@ -295,7 +295,8 @@ Property functions of the kind
 propsel = @pf (;\$c, d = \$a)
 ```
 
-Can be used to select (and rename) properties, and they have special
+(or equivalently `@pf (c = \$c, d = \$a)`)
+can be used to select (and rename) properties, and they have special
 broadcasting optimizations for table-like arguments. This can make
 broadcasts of such property selectors zero-copy O(1) operations:
 
@@ -371,10 +372,10 @@ function _flip_dollars(expr::Expr)
         return only(expr.args)
     elseif expr.head === :quote || expr.head === :macrocall
         return expr
-    elseif expr.head === :call || expr.head === :kw || expr.head === :(::) ||
+    elseif expr.head === :call || expr.head === :kw || expr.head === :(=) || expr.head === :(::) ||
             (expr.head === :. && length(expr.args) == 2 && _is_dotcall_argtuple(expr.args[2]))
-        # Callees (incl. broadcast callees), keyword-argument names and type
-        # annotations are not value positions:
+        # Callees (incl. broadcast callees), keyword-argument names, assignment
+        # targets and type annotations are not value positions:
         return Expr(expr.head, expr.args[1], map(_flip_dollars, expr.args[2:end])...)
     else
         return Expr(expr.head, map(_flip_dollars, expr.args)...)
@@ -388,7 +389,7 @@ end
 
 _unpack_ntelem_assignment(::Any) = nothing
 function _unpack_ntelem_assignment(expr::Expr)
-    if expr.head == :kw
+    if expr.head == :kw || expr.head == :(=)
         src = _unpack_dollar_ref(expr.args[2])
         if !isnothing(src) && expr.args[1] isa Symbol
             return expr.args[1]::Symbol => src
@@ -407,27 +408,27 @@ end
 
 _get_property_selection(::Any) = nothing
 function _get_property_selection(expr::Expr)
-    inputs = _PropRef[]
-    output = Symbol[]
-    if expr.head == :tuple && length(expr.args) == 1
-        inner_expr = only(expr.args)
-        if inner_expr isa Expr && inner_expr.head == :parameters
-            for arg in inner_expr.args
-                src_trg = _unpack_ntelem_assignment(arg)
-                if isnothing(src_trg)
-                    return nothing
-                else
-                    push!(output, src_trg[1])
-                    push!(inputs, src_trg[2])
-                end
-            end
-            return inputs => output
-        else
-            return nothing
-        end
+    expr.head == :tuple || return nothing
+    args = expr.args
+    entries = if length(args) == 1 && args[1] isa Expr && (args[1]::Expr).head == :parameters
+        (args[1]::Expr).args
+    elseif !isempty(args) && all(e -> e isa Expr && e.head == :(=), args)
+        args
     else
         return nothing
     end
+    inputs = _PropRef[]
+    output = Symbol[]
+    for arg in entries
+        src_trg = _unpack_ntelem_assignment(arg)
+        if isnothing(src_trg)
+            return nothing
+        else
+            push!(output, src_trg[1])
+            push!(inputs, src_trg[2])
+        end
+    end
+    return inputs => output
 end
 
 

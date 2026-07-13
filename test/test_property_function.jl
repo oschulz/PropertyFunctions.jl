@@ -36,6 +36,7 @@ end
     @test f_propsel == PropSelFunction{(:b, :a), (:b, :c)}()
     @test f_propsel == PropSelFunction(:b, :a => :c)
     @test PropSelFunction{(:b, :a)}() == PropSelFunction{(:b, :a), (:b, :a)}()
+    @test @pf((b = $b, c = $a)) === f_propsel
 
 
     f_struct = @pf TestStruct($a + $c, $a - $c)
@@ -101,6 +102,10 @@ end
     @test !(f_mixed_expr isa PropSelFunction)
     @test @inferred(f_mixed_expr(x)) == (c = 3, d = 2)
 
+    f_eqform_expr = @pf (c = $c, d = $a + 1)
+    @test !(f_eqform_expr isa PropSelFunction)
+    @test @inferred(f_eqform_expr(x)) == (c = 3, d = 2)
+
     f_outer = @pf (;$a, outer)
     @test !(f_outer isa PropSelFunction)
     @test f_outer(x) == (a = 1, outer = 42)
@@ -153,6 +158,7 @@ end
     @test f_fp_chain(x) == x.a.b + x.d
 
     f_nestsel = @pf (;$(a.b), e = $a.c)
+    @test @pf((b = $(a.b), e = $a.c)) === f_nestsel
     @test f_nestsel isa PropSelFunction{((:a, :b), (:a, :c)), (:b, :e)}
     @test @inferred(f_nestsel(x)) == (b = x.a.b, e = x.a.c)
     @test f_nestsel.(xs).b === xs.a.b
@@ -183,6 +189,8 @@ end
 
     @test (@fp (; b, c = a)) isa PropSelFunction{(:b, :a), (:b, :c)}
     @test (@fp (; b, c = a))(x) == (b = 2, c = 1)
+    @test (@fp (b = b, c = a)) === (@fp (; b, c = a))
+    @test (@fp (s = a + $c_outer,))(x) == (s = 11,)
 
     @test (@fp (a, :(q + 1), raw"$b"))(x) == (1, :(q + 1), raw"$b")
     @test (@fp Base.abs(a) + sum(sqrt.((a, c))))(x) ≈ abs(x.a) + sqrt(x.a) + sqrt(x.c)
