@@ -78,7 +78,8 @@ end
     struct PropertyFunction <: Function
 
 Use only for dispatch in special cases. User code should *not* create
-instances of `PropertyFunction` directly - use the `@fp` macro instead.
+instances of `PropertyFunction` directly - use the [`@pf`](@ref) or
+[`@fp`](@ref) macros instead.
 
 The type parameters of `PropertyFunction` are subject to change and not
 part of the public API of the PropertyFunctions package.
@@ -210,6 +211,11 @@ xs |> filterby(@pf \$a + \$c^2 < 0.5)
 ```
 """
 macro pf(expr)
+    _pf_impl(expr)
+end
+export @pf
+
+function _pf_impl(expr)
     srcs_trgs = _get_property_selection(expr)
     if !isnothing(srcs_trgs)
         srcs, trgs = srcs_trgs
@@ -231,7 +237,46 @@ macro pf(expr)
         return res_expr
     end
 end
-export @pf
+
+
+"""
+    @fp expression
+
+Like [`@pf`](@ref), but with the inverse `\$` convention: plain symbols in
+value positions refer to properties of the function argument, while
+`\$`-escaped symbols and expressions refer to the surrounding scope.
+Function names and other non-value positions are never treated as
+properties.
+
+`@fp(a + f(b) + \$c)` is equivalent to `@pf(\$a + f(\$b) + c)`.
+
+Note that functions passed as *arguments* are in value position and so
+must be `\$`-escaped: `@fp foldl(\$+, a)`.
+"""
+macro fp(expr)
+    _pf_impl(_flip_dollars(expr))
+end
+export @fp
+
+_flip_dollars(x) = x
+_flip_dollars(sym::Symbol) = Expr(:$, sym)
+
+_is_dotcall_argtuple(x) = x isa Expr && x.head === :tuple
+
+function _flip_dollars(expr::Expr)
+    if expr.head === :$ && length(expr.args) == 1
+        return only(expr.args)
+    elseif expr.head === :quote || expr.head === :macrocall
+        return expr
+    elseif expr.head === :call || expr.head === :kw || expr.head === :(::) ||
+            (expr.head === :. && length(expr.args) == 2 && _is_dotcall_argtuple(expr.args[2]))
+        # Callees (incl. broadcast callees), keyword-argument names and type
+        # annotations are not value positions:
+        return Expr(expr.head, expr.args[1], map(_flip_dollars, expr.args[2:end])...)
+    else
+        return Expr(expr.head, map(_flip_dollars, expr.args)...)
+    end
+end
 
 _unpack_dollar_sym(::Any) = nothing
 function _unpack_dollar_sym(expr::Expr)

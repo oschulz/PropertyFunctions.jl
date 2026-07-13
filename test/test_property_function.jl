@@ -124,3 +124,26 @@ end
         @test err isa ArgumentError
     end
 end
+
+
+@testset "fp macro" begin
+    x = (a = 1, b = 2, c = 3)
+    c_outer = 10
+    f(u) = 2u
+
+    f_fp = @fp a + f(b) + $c_outer
+    @test f_fp isa PropertyFunction{(:a, :b)}
+    @test @inferred(f_fp(x)) == x.a + f(x.b) + c_outer
+
+    @test (@fp (; b, c = a)) isa PropSelFunction{(:b, :a), (:b, :c)}
+    @test (@fp (; b, c = a))(x) == (b = 2, c = 1)
+
+    @test (@fp Base.abs(a) + sum(sqrt.((a, c))))(x) ≈ abs(x.a) + sqrt(x.a) + sqrt(x.c)
+    @test (@fp a + $(c_outer + 1))(x) == x.a + 11
+    @test (@fp foldl($+, (a, b, c)))(x) == 6
+    @test (@fp TestStruct(a + c, a - c))(x) == TestStruct(4, -2)
+
+    xs = StructArrays.StructArray((a = [1.0, 2.0], b = [3.0, 4.0], c = [5.0, 6.0]))
+    @test @inferred(broadcast(@fp(a + c^2), xs)) == xs.a .+ xs.c .^ 2
+    @test (@fp (; c, b)).(xs).c === xs.c
+end
