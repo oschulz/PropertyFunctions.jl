@@ -45,13 +45,8 @@ end
     f_bool_ref = x -> x.a + x.c^2 < 0.5
 
     @test @inferred(broadcast(f_real, xs_sa)) isa Vector{<:Real}
-    if VERSION >= v"1.8"
-        @test @inferred(broadcast(f_nt, xs_sa)) isa StructArray
-        @test @inferred(broadcast(f_propsel, xs_sa)) isa StructArray
-    else
-        @test (broadcast(f_nt, xs_sa)) isa StructArray
-        @test (broadcast(f_propsel, xs_sa)) isa StructArray
-    end
+    @test @inferred(broadcast(f_nt, xs_sa)) isa StructArray
+    @test @inferred(broadcast(f_propsel, xs_sa)) isa StructArray
     @test f_propsel.(xs_sa).b === xs_sa.b
     @test f_propsel.(xs_sa).c === xs_sa.a
     @test @inferred(broadcast(f_struct, xs_sa)) isa StructArray
@@ -62,21 +57,13 @@ end
     
         for (f, f_ref) in [(f_real, f_real_ref), (f_nt, f_nt_ref), (f_propsel, f_propsel_ref), (f_struct, f_struct_ref), (f_bool, f_bool_ref)]
             @test @inferred(f(first(xs))) == f_ref(first(xs))
-            if VERSION >= v"1.8"
-                @test @inferred(broadcast(f, xs)) == f_ref.(xs)
-            else
-                @test (broadcast(f, xs)) == f_ref.(xs)
-            end
+            @test @inferred(broadcast(f, xs)) == f_ref.(xs)
             if f isa PropSelFunction && xs isa StructArray
                 @test @inferred(broadcasted(f, xs)) isa StructArray
             else
                 @test @inferred(broadcasted(f, xs)) isa Broadcast.Broadcasted
             end
-            if VERSION >= v"1.8"
-                @test @inferred(copy(broadcasted(f, xs))) == f_ref.(xs)
-            else
-                @test (copy(broadcasted(f, xs))) == f_ref.(xs)
-            end
+            @test @inferred(copy(broadcasted(f, xs))) == f_ref.(xs)
         end
     end
 
