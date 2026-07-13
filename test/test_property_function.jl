@@ -85,6 +85,7 @@ end
     end
     @test map(f_nt, xs_sa) isa StructArray
     @test map(f_propsel, xs_sa).b === xs_sa.b
+    @test filter(@pf(42 > 0), BitVector([true, false])) == [true, false]
 end
 
 
@@ -144,6 +145,7 @@ end
     @test (@fp (; b, c = a)) isa PropSelFunction{(:b, :a), (:b, :c)}
     @test (@fp (; b, c = a))(x) == (b = 2, c = 1)
 
+    @test (@fp (a, :(q + 1), raw"$b"))(x) == (1, :(q + 1), raw"$b")
     @test (@fp Base.abs(a) + sum(sqrt.((a, c))))(x) ≈ abs(x.a) + sqrt(x.a) + sqrt(x.c)
     @test (@fp a + $(c_outer + 1))(x) == x.a + 11
     @test (@fp foldl($+, (a, b, c)))(x) == 6
