@@ -12,7 +12,7 @@ DocMeta.setdocmeta!(
     PropertyFunctions,
     :DocTestSetup,
     :(using PropertyFunctions);
-    recursive=true,
+    recursive = true
 )
 
 makedocs(
@@ -25,11 +25,11 @@ makedocs(
     pages = [
         "Home" => "index.md",
         "API" => "api.md",
-        "LICENSE" => "LICENSE.md",
+        "LICENSE" => "LICENSE.md"
     ],
     doctest = ("fixdoctests" in ARGS) ? :fix : true,
     linkcheck = !("nonstrict" in ARGS),
-    strict = !("nonstrict" in ARGS),
+    warnonly = ("nonstrict" in ARGS)
 )
 
 deploydocs(
