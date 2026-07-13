@@ -98,6 +98,9 @@ end
     @test !(f_outer isa PropSelFunction)
     @test f_outer(x) == (a = 1, outer = 42)
 
+    f_ordered = @pf $c + $a
+    @test f_ordered isa PropertyFunction{(:c, :a)}
+
     f_tuple = @pf ($a,)
     @test @inferred(f_tuple(x)) == (1,)
 

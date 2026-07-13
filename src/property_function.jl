@@ -3,9 +3,18 @@
 
 # Modeled after Base.Base._lift_one_interp!:
 function subst_prop_refs!(e)
-    argmap = IdDict{Symbol,Symbol}()  # store the new gensymed arguments
+    argmap = Pair{Symbol,Symbol}[]  # maps property names to gensymed arguments, in order of first use
     subst_prop_refs_helper(e, false, argmap) # Start out _not_ in a quote context (false)
     argmap
+end
+
+function _get_argsym!(argmap::Vector{Pair{Symbol,Symbol}}, propname::Symbol)
+    i = findfirst(entry -> entry.first === propname, argmap)
+    if isnothing(i)
+        push!(argmap, propname => gensym(propname))
+        i = lastindex(argmap)
+    end
+    argmap[i].second
 end
 
 subst_prop_refs_helper(v, _, _) = v
@@ -18,10 +27,7 @@ function subst_prop_refs_helper(expr::Expr, in_quote_context, argmap)
         else
             propname = expr.args[1]
             if propname isa Symbol
-                if !haskey(argmap, propname)
-                    argmap[propname] = gensym(propname)
-                end
-                return argmap[propname]
+                return _get_argsym!(argmap, propname)
             else
                 throw(ArgumentError("Properties referenced via \$... must be symbols"))
             end
@@ -61,8 +67,8 @@ function props2varsyms(exr)
     new_expr = deepcopy(exr)
     argmap = subst_prop_refs!(new_expr)
 
-    props = collect(keys(argmap))
-    vars = [argmap[p] for p in props]
+    props = [entry.first for entry in argmap]
+    vars = [entry.second for entry in argmap]
 
     return props, vars, new_expr
 end
