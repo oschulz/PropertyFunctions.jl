@@ -292,6 +292,10 @@ _colaccess(xs) = Val(Tables.columnaccess(xs))
     _broadcasted_impl(_colaccess(xs), pf, xs)
 end
 
+# A property function that references no properties has no columns to broadcast over:
+@inline Broadcast.broadcasted(pf::PropertyFunction{()}, xs::AbstractArray) =
+    _broadcasted_impl(Val(false), pf, xs)
+
 @inline function _broadcasted_impl(::Val{true}, pf::PropertyFunction, xs::AbstractArray)
     cols = _prop_tuple(pf, Tables.columns(xs))
     bstyle = BroadcastStyle(typeof(StructArray(cols)))

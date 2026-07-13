@@ -103,6 +103,8 @@ end
 
     f_const = @pf 42
     @test @inferred(f_const(x)) == 42
+    @test @inferred(broadcast(f_const, StructArrays.StructArray((a = [1.0, 2.0],)))) == [42, 42]
+    @test @inferred(broadcast(f_const, [0.1, 0.2])) == [42, 42]
 
     f_quote = @pf ($a, :(b + 1))
     @test f_quote(x) == (1, :(b + 1))
