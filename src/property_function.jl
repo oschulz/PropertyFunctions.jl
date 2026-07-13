@@ -31,8 +31,14 @@ function subst_prop_refs_helper(expr::Expr, in_quote_context, argmap)
     elseif expr.head === :macrocall
         return expr  # Don't recur into macro calls, since some other macros use $
     end
+    in_params = expr.head === :parameters
     for (i,e) in enumerate(expr.args)
-        expr.args[i] = subst_prop_refs_helper(e, in_quote_context, argmap)
+        new_e = subst_prop_refs_helper(e, in_quote_context, argmap)
+        if in_params && new_e isa Symbol && e isa Expr && e.head === :$
+            # Preserve the property name of `$prop` in named-tuple/kwarg shorthand position:
+            new_e = Expr(:kw, only(e.args)::Symbol, new_e)
+        end
+        expr.args[i] = new_e
     end
     expr
 end
@@ -221,16 +227,18 @@ macro pf(expr)
 end
 export @pf
 
+_unpack_dollar_sym(::Any) = nothing
 function _unpack_dollar_sym(expr::Expr)
-    if expr.head == :$ && length(expr.args) == 1
-        return only(expr.args)
+    if expr.head == :$ && length(expr.args) == 1 && only(expr.args) isa Symbol
+        return only(expr.args)::Symbol
     else
         return nothing
     end
 end
 
+_unpack_ntelem_assignment(::Any) = nothing
 function _unpack_ntelem_assignment(expr::Expr)
-    if expr isa Expr && expr.head == :kw
+    if expr.head == :kw
         src = _unpack_dollar_sym(expr.args[2])
         if !isnothing(src)
             return expr.args[1] => src
@@ -253,7 +261,7 @@ function _get_property_selection(expr::Expr)
     output = Symbol[]
     if expr.head == :tuple && length(expr.args) == 1
         inner_expr = only(expr.args)
-        if inner_expr.head == :parameters
+        if inner_expr isa Expr && inner_expr.head == :parameters
             for arg in inner_expr.args
                 src_trg = _unpack_ntelem_assignment(arg)
                 if isnothing(src_trg)
