@@ -23,7 +23,7 @@ function subst_prop_refs_helper(expr::Expr, in_quote_context, argmap)
                 end
                 return argmap[propname]
             else
-                throw(ArgumentError("Properties referenced via \$... must by symbols"))
+                throw(ArgumentError("Properties referenced via \$... must be symbols"))
             end
         end
     elseif expr.head === :quote
@@ -155,7 +155,7 @@ _propsel_trg(src_trg::Pair{Symbol,Symbol}) = src_trg[2]
 """
     @pf expression
 
-Generates a function that accesses the properties of it's argument
+Generates a function that accesses the properties of its argument
 referenced via `\$property` in `expression`.
 
 `@pf(\$a + \$c^2)` is equivalent to `x -> x.a + x.c^2`.
@@ -310,9 +310,9 @@ end
     Broadcast.broadcasted(x -> pf.sel_prop_func(_prop_tuple(pf, x)...), xs)
 end
 
-# DoTo: Specialize broadcasting for Iterators.Flatten over objects with column access
+# ToDo: Specialize broadcasting for Iterators.Flatten over objects with column access
 
-# DoTo - possible extensions:
+# ToDo - possible extensions:
 
 # Strided.StridedView offers automatic multithreaded operation.
 #@inline (bpf::BroadcastFunction{<:PropertyFunction})(::Type{StridedView}, tbl) =

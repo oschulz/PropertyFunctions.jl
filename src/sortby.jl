@@ -18,7 +18,7 @@ end
         rev::Bool = false,
     )
 
-Generates a function that sorts and array by `f`, returning either a copy
+Generates a function that sorts an array by `f`, returning either a copy
 (default) or a view (ignored if the object does not support views).
 
 Example:
