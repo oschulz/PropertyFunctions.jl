@@ -128,23 +128,33 @@ _getprop_expr(base, name::Symbol) = Expr(:., base, QuoteNode(name))
 _getprop_expr(base, path::Tuple) = foldl((e, name) -> Expr(:., e, QuoteNode(name)), path, init = base)
 
 
+struct _PropGetter{name} <: Function end
+@inline (::_PropGetter{name})(x) where name = getproperty(x, name)
+
+
 """
     PropertyFunctions.subcolumn(col::AbstractArray, name::Symbol)
+    PropertyFunctions.subcolumn(col::AbstractArray, ::Val{name})
 
 Get the column `name` of an array `col` of structs.
 
 Returns `getproperty.(col, name)` by default, `StructArray` columns
 provide zero-copy access. Specialize for array types that support
 efficient column access.
+
+The `Val` variants keep the property name in the type domain, which is
+required for type inference on columns that are not `StructArray`s.
 """
 @inline subcolumn(col::AbstractArray, name::Symbol) = getproperty.(col, name)
 @inline subcolumn(col::StructArray, name::Symbol) = getproperty(col, name)
+@inline subcolumn(col::AbstractArray, ::Val{name}) where name = broadcast(_PropGetter{name}(), col)
+@inline subcolumn(col::StructArray, ::Val{name}) where name = getproperty(col, name)
 
 _getcol_expr(base, name::Symbol) = Expr(:., base, QuoteNode(name))
 function _getcol_expr(base, path::Tuple)
     ref = Expr(:., base, QuoteNode(first(path)))
     for name in Base.tail(path)
-        ref = :(subcolumn($ref, $(QuoteNode(name))))
+        ref = :(subcolumn($ref, Val($(QuoteNode(name)))))
     end
     return ref
 end

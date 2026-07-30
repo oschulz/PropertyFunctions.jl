@@ -170,6 +170,13 @@ end
 
     @test PropertyFunctions.subcolumn(xs.a, :b) === xs.a.b
     @test PropertyFunctions.subcolumn([(b = 1,), (b = 2,)], :b) == [1, 2]
+    @test PropertyFunctions.subcolumn(xs.a, Val(:b)) === xs.a.b
+    @test @inferred(PropertyFunctions.subcolumn([(b = 1, c = 2.0)], Val(:c))) == [2.0]
+
+    # Nested properties of a non-StructArray column with differing field types
+    # are only type-stable if the property name is in the type domain:
+    zs = StructArrays.StructArray((a = [(b = 1, c = 2.0), (b = 3, c = 4.0)], d = [5, 6]))
+    @test @inferred(broadcast(@pf($a.c * $d), zs)) == [10.0, 24.0]
 
     f_overlap = @pf ($a.b, $a)
     @test f_overlap isa PropertyFunction{(:a,)}
