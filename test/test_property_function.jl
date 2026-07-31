@@ -6,6 +6,8 @@ using Test
 using StructArrays
 using Base.Broadcast: broadcasted
 using PropertyFunctions: PPath
+using SparseArrays: SparseVector
+using FillArrays: Fill
 
 
 struct TestStruct{T}
@@ -130,6 +132,19 @@ end
     @test map(f_nt, xs_sa) isa StructArray
     @test map(f_propsel, xs_sa).b === xs_sa.b
     @test filter(@pf(42 > 0), BitVector([true, false])) == [true, false]
+end
+
+
+@testset "map and filter fallbacks" begin
+    # The map and filter specializations are restricted to StructArray, so
+    # array types with their own map and filter specializations, like sparse
+    # and fill arrays, must dispatch to those without method ambiguities:
+    sv = SparseVector(5, [2, 4], [1.0 + 2.0im, 3.0 + 4.0im])
+    @test map(@pf(2 * $re), sv) == 2 .* real.(sv)
+    @test filter(@pf($re > 2), sv) == [3.0 + 4.0im]
+
+    fl = Fill((a = 1, b = 2), 3)
+    @test map(@pf($a + $b), fl) == fill(3, 3)
 end
 
 

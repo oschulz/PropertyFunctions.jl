@@ -633,12 +633,14 @@ end
     Broadcast.broadcasted(pf.sel_prop_func, xs)
 end
 
-# Wider signatures would be ambiguous with Base and LinearAlgebra methods;
-# other array shapes fall back to the generic Base implementations:
-Base.map(pf::PropertyFunction, xs::AbstractVector) = broadcast(pf, xs)
-Base.filter(pf::PropertyFunction, xs::AbstractVector) = filterby(pf)(xs)
-Base.filter(pf::PropertyFunction, xs::Vector) = filterby(pf)(xs)
-Base.filter(pf::PropertyFunction, xs::BitVector) = filterby(pf)(xs)
+# Abstract array types in the signatures would cause criss-cross method
+# ambiguities with the map and filter specializations of Base and of array
+# implementations like SparseArrays, GPUArrays and FillArrays, so specialize
+# only on StructArray. Other array types fall back to their own or the
+# generic implementations, while broadcasting and filterby/sortby serve as
+# the optimized generic entry points:
+Base.map(pf::PropertyFunction, xs::StructArray) = broadcast(pf, xs)
+Base.filter(pf::PropertyFunction, xs::StructArray) = filterby(pf)(xs)
 
 
 # ToDo: Specialize broadcasting for Iterators.Flatten over objects with column access
