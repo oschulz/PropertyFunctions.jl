@@ -10,6 +10,7 @@ Test.@testset "Package PropertyFunctions" begin
     include("test_sortby.jl")
     include("test_innermerge.jl")
     include("test_accessors_ext.jl")
+    include("test_functionchains_ext.jl")
     if get(ENV, "PROPERTYFUNCTIONS_TEST_REACTANT", "false") == "true"
         include("test_reactant_ext.jl")
     end

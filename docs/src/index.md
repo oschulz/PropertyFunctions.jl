@@ -12,6 +12,6 @@ The package also provides convenience functions [`sortby`](@ref) and [`filterby`
 
 Property functions can be used with `map` and `filter` directly and get the same column-access optimizations there as in broadcasting.
 
-Function composition `f ∘ pf` with a property function as the inner function results in a property function again, and compositions of pure property selections fuse into single selections.
+Function composition `f ∘ pf` with a property function as the inner function results in a property function again, and compositions of pure property selections fuse into single selections. The same fusion happens in function chains built via [FunctionChains.jl](https://github.com/oschulz/FunctionChains.jl)'s `ffchain`/`ffcomp` when a property function is followed by other functions.
 
 When [Accessors.jl](https://github.com/JuliaObjects/Accessors.jl) is loaded, optics like `@o _.a.b` can be converted to property functions via `PropertyFunction(optic)`, and `Accessors.set` works with pure property extractions and selections.
