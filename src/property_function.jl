@@ -502,6 +502,16 @@ Nested properties are referenced via plain `a.b.c` chains.
 
 Note that functions passed as *arguments* are in value position and so
 must be `\$`-escaped: `@fp foldl(\$+, a)`.
+
+Expressions that introduce local variables, like anonymous functions,
+`do`/`let`/`for` blocks, generators, comprehensions and assignments, are
+not supported by `@fp`, since local variables would be indistinguishable
+from property references (`=` is only supported in named-tuple
+expressions like `@fp (b = b, c = a)`). Use [`@pf`](@ref) for such
+expressions instead.
+
+In type assertions like `@fp a::Int` the asserted value is in value
+position, while the type refers to the surrounding scope.
 """
 macro fp(expr)
     _pf_impl(_flip_dollars(expr))
@@ -513,15 +523,46 @@ _flip_dollars(sym::Symbol) = Expr(:$, sym)
 
 _is_dotcall_argtuple(x) = x isa Expr && x.head === :tuple
 
+# In named-tuple elements `(b = ..., c = ...)` the left-hand side of `=` is a
+# field name, not a value position. This is the only supported use of `=`:
+_flip_dollars_ntelem(x) = _flip_dollars(x)
+function _flip_dollars_ntelem(expr::Expr)
+    if expr.head === :(=) && length(expr.args) == 2
+        return Expr(:(=), expr.args[1], _flip_dollars(expr.args[2]))
+    else
+        return _flip_dollars(expr)
+    end
+end
+
 function _flip_dollars(expr::Expr)
     if expr.head === :$ && length(expr.args) == 1
         return only(expr.args)
     elseif expr.head === :quote || expr.head === :macrocall
         return expr
-    elseif expr.head === :call || expr.head === :kw || expr.head === :(=) || expr.head === :(::) ||
+    # TODO: Support expressions that introduce local variables via a
+    # scope-aware traversal instead of rejecting them:
+    elseif expr.head === :-> || expr.head === :do || expr.head === :let || expr.head === :for ||
+            expr.head === :while || expr.head === :function || expr.head === :generator ||
+            expr.head === :comprehension || expr.head === :typed_comprehension ||
+            expr.head === :local || expr.head === :global || expr.head === :const ||
+            expr.head === :where ||
+            (expr.head === :try && length(expr.args) >= 2 && expr.args[2] isa Symbol)
+        throw(ArgumentError("@fp does not support expressions that introduce local variables, like anonymous functions, do/let/for blocks, generators, comprehensions or try/catch with a catch variable. Use @pf instead."))
+    elseif endswith(String(expr.head), '=')
+        throw(ArgumentError("@fp does not support assignments outside of named-tuple expressions. Use @pf instead."))
+    elseif expr.head === :(::)
+        # Only the asserted value is a value position, the type comes from
+        # the surrounding lexical scope:
+        return length(expr.args) == 2 ? Expr(:(::), _flip_dollars(expr.args[1]), expr.args[2]) : expr
+    elseif expr.head === :comparison
+        # In chained comparisons the operators are not value positions:
+        return Expr(:comparison, (isodd(i) ? _flip_dollars(a) : a for (i, a) in enumerate(expr.args))...)
+    elseif expr.head === :tuple
+        return Expr(:tuple, map(_flip_dollars_ntelem, expr.args)...)
+    elseif expr.head === :call || expr.head === :kw ||
             (expr.head === :. && length(expr.args) == 2 && _is_dotcall_argtuple(expr.args[2]))
-        # Callees (incl. broadcast callees), keyword-argument names, assignment
-        # targets and type annotations are not value positions:
+        # Callees (incl. broadcast callees) and keyword-argument names are
+        # not value positions:
         return Expr(expr.head, expr.args[1], map(_flip_dollars, expr.args[2:end])...)
     else
         return Expr(expr.head, map(_flip_dollars, expr.args)...)

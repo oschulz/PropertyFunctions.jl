@@ -307,4 +307,26 @@ end
     xs = StructArrays.StructArray((a = [1.0, 2.0], b = [3.0, 4.0], c = [5.0, 6.0]))
     @test @inferred(broadcast(@fp(a + c^2), xs)) == xs.a .+ xs.c .^ 2
     @test (@fp (; c, b)).(xs).c === xs.c
+
+    # Only the asserted value of a type assertion is in value position, and
+    # the operators of chained comparisons are not value positions:
+    @test (@fp a::Int)(x) === 1
+    @test (@fp (a::Int) + b)(x) === 3
+    @test (@fp 0 < a <= 2)(x) === true
+
+    # Expressions introducing local variables are not supported (would be
+    # indistinguishable from property references) and must be rejected:
+    flip = PropertyFunctions._flip_dollars
+    @test_throws ArgumentError flip(:(map(x -> x + a, b)))
+    @test_throws ArgumentError flip(:(sum(x^2 for x in a)))
+    @test_throws ArgumentError flip(:([x^2 for x in a]))
+    @test_throws ArgumentError flip(:(map(b) do x; x + a; end))
+    @test_throws ArgumentError flip(:(let y = a; y + 1; end))
+    @test_throws ArgumentError flip(:(for y in a; y; end))
+    @test_throws ArgumentError flip(:(begin y = a; y + 1 end))
+    @test_throws ArgumentError flip(:(y += a))
+    @test_throws ArgumentError flip(:(local y))
+    @test_throws ArgumentError flip(:(const y = a))
+    @test_throws ArgumentError flip(:(try a catch err; err end))
+    @test flip(:(try a catch; b end)) isa Expr
 end
