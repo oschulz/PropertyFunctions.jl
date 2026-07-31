@@ -22,8 +22,7 @@ Generates a function that sorts an array by `f`, returning either a copy
 (default) or a view (ignored if the object does not support views).
 
 The generated function also accepts unmaterialized broadcasts
-(`Base.Broadcast.Broadcasted`) and evaluates `f` on them in a fused
-fashion.
+(`Base.Broadcast.Broadcasted`), which are materialized only once.
 
 Example:
 ```julia
@@ -46,7 +45,8 @@ sortby(f; kwargs...) = sortby(getindex, f; kwargs...)
 
 
 @inline function (srt::_SortBy)(xs::Union{AbstractArray,Base.Broadcast.Broadcasted})
-    key = srt.f.(xs)
+    vals = Broadcast.materialize(xs)
+    key = srt.f.(vals)
     idxs = sortperm(key, rev = srt.rev)
-    srt.idxaccf(Broadcast.materialize(xs), idxs)
+    srt.idxaccf(vals, idxs)
 end

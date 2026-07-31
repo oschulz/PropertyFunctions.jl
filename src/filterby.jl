@@ -17,8 +17,7 @@ either a copy (default) or a view (ignored if the object does not support
 views).
 
 The generated function also accepts unmaterialized broadcasts
-(`Base.Broadcast.Broadcasted`) and evaluates `f` on them in a fused
-fashion.
+(`Base.Broadcast.Broadcasted`), which are materialized only once.
 
 Example:
 ```julia
@@ -38,6 +37,7 @@ filterby(f) = filterby(getindex, f)
 
 
 function(flt::_FilterBy)(xs::Union{AbstractArray,Base.Broadcast.Broadcasted})
-    sel = flt.f.(xs)::AbstractArray{Bool}
-    flt.idxaccf(Broadcast.materialize(xs), sel)
+    vals = Broadcast.materialize(xs)
+    sel = flt.f.(vals)::AbstractArray{Bool}
+    flt.idxaccf(vals, sel)
 end

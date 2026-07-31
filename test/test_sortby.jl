@@ -26,4 +26,10 @@ using Base.Broadcast: broadcasted
     ref_bc_ys = sort(xs .- 0.2, by = x -> (x - 0.5)^2)
     @test @inferred(bc |> sortby(x -> (x - 0.5)^2)) == ref_bc_ys
     @test @inferred(bc |> sortby(view, x -> (x - 0.5)^2)) == ref_bc_ys
+
+    # Broadcasted inputs must be evaluated only once (issue found in review):
+    counter = Ref(0)
+    counting_bc = broadcasted(x -> (counter[] += 1; x), [3, 1, 2])
+    @test counting_bc |> sortby(identity) == [1, 2, 3]
+    @test counter[] == 3
 end

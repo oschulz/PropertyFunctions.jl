@@ -22,4 +22,10 @@ using Base.Broadcast: broadcasted
     ref_bc_ys = filter(x -> x < 0.3, xs .- 0.2)
     @test @inferred(bc |> filterby(x -> x < 0.3)) == ref_bc_ys
     @test @inferred(bc |> filterby(view, x -> x < 0.3)) == ref_bc_ys
+
+    # Broadcasted inputs must be evaluated only once (issue found in review):
+    counter = Ref(0)
+    counting_bc = broadcasted(x -> (counter[] += 1; x), 1:3)
+    @test counting_bc |> filterby(isodd) == [1, 3]
+    @test counter[] == 3
 end
