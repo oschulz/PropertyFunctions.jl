@@ -86,4 +86,14 @@ _plus_one_nt(x) = (b = x + 1,)
 
     pf_log = PropertyFunction(@o log(_.d))
     @test Accessors.set((d = 1.0,), pf_log, 0.0) == (d = 1.0,)
+
+    pf_exp = exp ∘ @pf($(a.b))
+    @test Accessors.set(x_nt, pf_exp, exp(9.0)) == (a = (b = 9.0, c = 2), d = 4)
+    @test pf_exp(Accessors.set(x_nt, pf_exp, 3.5)) ≈ 3.5
+    @test Accessors.modify(v -> 2v, x_nt, exp ∘ @pf($d)).d ≈ 4 + log(2)
+
+    @test Accessors.set(x_nt, @pf($x) ∘ @pf((; x = $a.b, y = $d)), 42) ==
+        (a = (b = 42, c = 2), d = 4)
+
+    @test_throws Exception Accessors.set(x_nt, @pf($a.b + 1), 0)
 end

@@ -275,6 +275,14 @@ end
     return _props_nt_expr(paths, argexprs)
 end
 
+# The properties of x that pf may access, as a (possibly nested) NamedTuple.
+# Semantically, pf(x) == pf.sel_prop_func(_restricted_props(pf, x)):
+@generated function _restricted_props(pf::PropertyFunction{Paths}, x) where Paths
+    paths = Any[_path(P) for P in Paths.parameters]
+    argexprs = Any[_getprop_expr(:x, p) for p in paths]
+    return _props_nt_expr(paths, argexprs)
+end
+
 # Zero-copy nested StructArray of the referenced property columns, structured
 # like the NamedTuple that _PropsNTKernel passes to the wrapped function:
 function _props_sa_expr(paths::Vector, argexprs::Vector)

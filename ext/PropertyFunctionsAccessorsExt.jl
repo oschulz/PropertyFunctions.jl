@@ -87,13 +87,32 @@ _path_optic(path::Tuple) = foldl((o, name) -> PropertyLens{name}() ∘ o, Base.t
 
 Set the properties accessed by `pf` in `obj`.
 
-Supported for property functions that purely extract or select properties,
-like `@pf \$a.b` (a single value), `@pf (\$a, \$b.c)` (a `Tuple` of values)
-and `@pf (;\$a, c = \$b)` (a `NamedTuple` of values), as well as for
-property functions with an optic body that `Accessors.set` can invert.
+Semantically, `pf` is the function wrapped by it composed with a
+restriction of its argument to the accessed property paths. So `set`
+restricts `obj` to those paths, sets the result of the wrapped function
+on the restriction via `Accessors.set`, and writes the updated
+restriction back to `obj`.
+
+Supported for property functions whose wrapped function `Accessors.set`
+can invert: pure property extractions and selections like `@pf \$a.b`
+(a single value), `@pf (\$a, \$b.c)` (a `Tuple` of values) and
+`@pf (;\$a, c = \$b)` (a `NamedTuple` of values), as well as invertible
+functions and optics composed with them, like `exp ∘ @pf \$a.b`.
 """
-Accessors.set(obj, pf::PropertyFunction{<:PPaths, <:Union{_PropSelector, ComposedFunction{<:Any, <:PropertyLens}}}, vals) =
-    Accessors.set(obj, pf.sel_prop_func, vals)
+function Accessors.set(obj, pf::PropertyFunction, vals)
+    props = PropertyFunctions._restricted_props(pf, obj)
+    new_props = Accessors.set(props, pf.sel_prop_func, vals)
+    return _set_restricted_props(obj, pf, new_props)
+end
+
+@generated function _set_restricted_props(obj, pf::PropertyFunction{Paths}, new_props) where {Paths}
+    ex = :obj
+    for P in Paths.parameters
+        p = _path(P)
+        ex = :(Accessors.set($ex, _path_optic($(QuoteNode(p))), $(PropertyFunctions._getprop_expr(:new_props, p))))
+    end
+    return ex
+end
 
 Accessors.set(obj, p::PPath, val) = Accessors.set(obj, _path_optic(_path(p)), val)
 
