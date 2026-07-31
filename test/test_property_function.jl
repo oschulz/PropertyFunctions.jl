@@ -5,11 +5,43 @@ using Test
 
 using StructArrays
 using Base.Broadcast: broadcasted
+using PropertyFunctions: PPath
 
 
 struct TestStruct{T}
     apc::T
     amc::T
+end
+
+
+@testset "ppath" begin
+    x = (a = (b = 1, c = 2), d = 3)
+
+    @test PPath(:d) === PPath{(:d,)}()
+    @test PPath(:a, :b) === PPath{(:a, :b)}()
+    @test @inferred(PPath(:d)(x)) == 3
+    @test @inferred(PPath(:a, :b)(x)) == 1
+end
+
+
+@testset "construction validation" begin
+    @test_throws ArgumentError PPath()
+    @test_throws ArgumentError PPath{()}()
+    @test_throws ArgumentError PPath{(1,)}()
+
+    @test_throws ArgumentError PropertyFunction{Tuple{PPath{(:a,)}, PPath{(:a, :b)}}}(identity)
+    @test_throws ArgumentError PropertyFunction{Tuple{PPath{(:a,)}, PPath{(:a,)}}}(identity)
+    @test_throws ArgumentError PropertyFunction{Tuple{PPath{()}}}(identity)
+
+    @test_throws ArgumentError PropSelFunction(PPath(:a), PPath(:a, :b) => :b)
+    @test_throws ArgumentError PropSelFunction(:a, :a)
+    @test_throws ArgumentError PropSelFunction(:a => :c, :b => :c)
+    @test_throws ArgumentError PropSelFunction{Tuple{PPath{(:a,)}}, (:x, :y)}()
+    @test_throws ArgumentError PropSelFunction{Tuple{PPath{()}}}()
+
+    @test PropertyFunction{Tuple{}}(x -> 42) isa PropertyFunction{Tuple{}}
+    @test PropSelFunction(:c, PPath(:a, :b) => :d) isa
+        PropSelFunction{Tuple{PPath{(:c,)}, PPath{(:a, :b)}}, (:c, :d)}
 end
 
 
@@ -32,12 +64,23 @@ end
 
     f_propsel = @pf (;$b, c = $a)
     f_propsel_ref = x -> (b = x.b, c = x.a)
-    @test f_propsel isa PropSelFunction{(:b, :a), (:b, :c)}
-    @test f_propsel == PropSelFunction{(:b, :a), (:b, :c)}()
+    @test f_propsel isa PropSelFunction{Tuple{PPath{(:b,)}, PPath{(:a,)}}, (:b, :c)}
+    @test f_propsel == PropSelFunction{Tuple{PPath{(:b,)}, PPath{(:a,)}}, (:b, :c)}()
     @test f_propsel == PropSelFunction(:b, :a => :c)
-    @test PropSelFunction{(:b, :a)}() == PropSelFunction{(:b, :a), (:b, :a)}()
+    @test PropSelFunction{Tuple{PPath{(:b,)}, PPath{(:a,)}}}() ==
+        PropSelFunction{Tuple{PPath{(:b,)}, PPath{(:a,)}}, (:b, :a)}()
     @test @pf((b = $b, c = $a)) === f_propsel
 
+    f_extract = @pf $a
+    f_extract_ref = x -> x.a
+    @test f_extract isa PropertyFunction{Tuple{PPath{(:a,)}}, PPath{(:a,)}}
+    @test f_extract.(xs_sa) === xs_sa.a
+
+    f_tplsel = @pf ($b, $a)
+    f_tplsel_ref = x -> (x.b, x.a)
+    @test @inferred(broadcast(f_tplsel, xs_sa)) isa StructArray
+    @test StructArrays.components(f_tplsel.(xs_sa))[1] === xs_sa.b
+    @test StructArrays.components(f_tplsel.(xs_sa))[2] === xs_sa.a
 
     f_struct = @pf TestStruct($a + $c, $a - $c)
     f_struct_ref(x) = TestStruct(x.a + x.c, x.a - x.c)
@@ -55,12 +98,12 @@ end
     for xs in [xs_sa, xs_arr, xs_gen, xs_flt]
         @inferred((x -> @pf($a + $c^2)(x))(first(xs))) isa Real
         @inferred(broadcast(@pf($a + $c^2), xs)) isa AbstractArray
-    
-        for (f, f_ref) in [(f_real, f_real_ref), (f_nt, f_nt_ref), (f_propsel, f_propsel_ref), (f_struct, f_struct_ref), (f_bool, f_bool_ref)]
+
+        for (f, f_ref) in [(f_real, f_real_ref), (f_nt, f_nt_ref), (f_propsel, f_propsel_ref), (f_extract, f_extract_ref), (f_tplsel, f_tplsel_ref), (f_struct, f_struct_ref), (f_bool, f_bool_ref)]
             @test @inferred(f(first(xs))) == f_ref(first(xs))
             @test @inferred(broadcast(f, xs)) == f_ref.(xs)
-            if f isa PropSelFunction && xs isa StructArray
-                @test @inferred(broadcasted(f, xs)) isa StructArray
+            if f.sel_prop_func isa PropertyFunctions._PropSelector && xs isa StructArray
+                @test !(@inferred(broadcasted(f, xs)) isa Broadcast.Broadcasted)
             else
                 @test @inferred(broadcasted(f, xs)) isa Broadcast.Broadcasted
             end
@@ -111,7 +154,7 @@ end
     @test f_outer(x) == (a = 1, outer = 42)
 
     f_ordered = @pf $c + $a
-    @test f_ordered isa PropertyFunction{(:c, :a)}
+    @test f_ordered isa PropertyFunction{Tuple{PPath{(:c,)}, PPath{(:a,)}}}
 
     f_tuple = @pf ($a,)
     @test @inferred(f_tuple(x)) == (1,)
@@ -144,25 +187,39 @@ end
     x = xs[1]
 
     f_chain = @pf $a.b + $d
-    @test f_chain isa PropertyFunction{((:a, :b), :d)}
+    @test f_chain isa PropertyFunction{Tuple{PPath{(:a, :b)}, PPath{(:d,)}}}
     @test @inferred(f_chain(x)) == x.a.b + x.d
     @test @inferred(broadcast(f_chain, xs)) == xs.a.b .+ xs.d
 
     f_parens = @pf $(a.c) * 2
-    @test f_parens isa PropertyFunction{((:a, :c),)}
+    @test f_parens isa PropertyFunction{Tuple{PPath{(:a, :c)}}}
     @test @inferred(f_parens(x)) == x.a.c * 2
     @test @inferred(broadcast(f_parens, xs)) == xs.a.c .* 2
 
     f_fp_chain = @fp a.b + d
-    @test f_fp_chain isa PropertyFunction{((:a, :b), :d)}
+    @test f_fp_chain isa PropertyFunction{Tuple{PPath{(:a, :b)}, PPath{(:d,)}}}
     @test f_fp_chain(x) == x.a.b + x.d
+
+    f_extract = @pf $a.b
+    @test f_extract === @fp a.b
+    @test f_extract === @pf $(a.b)
+    @test @inferred(f_extract(x)) == x.a.b
+    @test @inferred(broadcast(f_extract, xs)) === xs.a.b
+    @test (@pf $d) === (@fp d)
+    @test (@pf $d).(xs) === xs.d
+
+    f_tplsel = @pf ($d, $a.b)
+    @test @inferred(f_tplsel(x)) == (x.d, x.a.b)
+    @test @inferred(broadcast(f_tplsel, xs)) == [(xi.d, xi.a.b) for xi in xs]
+    @test StructArrays.components(f_tplsel.(xs))[2] === xs.a.b
 
     f_nestsel = @pf (;$(a.b), e = $a.c)
     @test @pf((b = $(a.b), e = $a.c)) === f_nestsel
-    @test f_nestsel isa PropSelFunction{((:a, :b), (:a, :c)), (:b, :e)}
+    @test f_nestsel isa PropSelFunction{Tuple{PPath{(:a, :b)}, PPath{(:a, :c)}}, (:b, :e)}
     @test @inferred(f_nestsel(x)) == (b = x.a.b, e = x.a.c)
     @test f_nestsel.(xs).b === xs.a.b
     @test f_nestsel.(xs).e === xs.a.c
+    @test PropSelFunction(PPath(:a, :b) => :b, PPath(:a, :c) => :e) === f_nestsel
 
     ys = StructArrays.StructArray((a = [(b = 1, c = 2), (b = 3, c = 4)], d = [5, 6]))
     @test @inferred(broadcast(@pf($a.b + $d), ys)) == [6, 9]
@@ -179,9 +236,14 @@ end
     @test @inferred(broadcast(@pf($a.c * $d), zs)) == [10.0, 24.0]
 
     f_overlap = @pf ($a.b, $a)
-    @test f_overlap isa PropertyFunction{(:a,)}
+    @test f_overlap isa PropertyFunction{Tuple{PPath{(:a,)}}}
+    @test !(f_overlap.sel_prop_func isa PropertyFunctions._PropSelector)
     @test @inferred(f_overlap(x)) == (x.a.b, x.a)
     @test @inferred(broadcast(f_overlap, xs)) == [(xi.a.b, xi.a) for xi in xs]
+
+    f_overlap_sel = @pf (;$a, c = $a.c)
+    @test !(f_overlap_sel isa PropSelFunction)
+    @test f_overlap_sel(x) == (a = x.a, c = x.a.c)
 end
 
 
@@ -191,10 +253,10 @@ end
     f(u) = 2u
 
     f_fp = @fp a + f(b) + $c_outer
-    @test f_fp isa PropertyFunction{(:a, :b)}
+    @test f_fp isa PropertyFunction{Tuple{PPath{(:a,)}, PPath{(:b,)}}}
     @test @inferred(f_fp(x)) == x.a + f(x.b) + c_outer
 
-    @test (@fp (; b, c = a)) isa PropSelFunction{(:b, :a), (:b, :c)}
+    @test (@fp (; b, c = a)) isa PropSelFunction{Tuple{PPath{(:b,)}, PPath{(:a,)}}, (:b, :c)}
     @test (@fp (; b, c = a))(x) == (b = 2, c = 1)
     @test (@fp (b = b, c = a)) === (@fp (; b, c = a))
     @test (@fp (s = a + $c_outer,))(x) == (s = 11,)

@@ -1,24 +1,77 @@
 # This file is a part of PropertyFunctions.jl, licensed under the MIT License (MIT).
 
 
-# A property reference: a property name or a path of nested property names.
-const _PropRef = Union{Symbol, Tuple{Vararg{Symbol}}}
+"""
+    abstract type PropertyFunctions._PropSelector <: Function
 
-_propref(path::Tuple{Vararg{Symbol}}) = length(path) == 1 ? only(path) : path
+Abstract supertype of pure property selectors and extractors.
+"""
+abstract type _PropSelector <: Function end
 
-_ref_head(name::Symbol) = name
-_ref_head(path::Tuple) = first(path)
 
-_ref_trgname(name::Symbol) = name
-_ref_trgname(path::Tuple) = last(path)
+_getprop_expr(base, path::Tuple) = foldl((e, name) -> Expr(:., e, QuoteNode(name)), path, init = base)
 
-_is_prefix_of(::_PropRef, ::Symbol) = false
-_is_prefix_of(a::Symbol, b::Tuple) = first(b) === a
+
+"""
+    PPath{path}
+
+Represents a path of nested property names.
+
+Constructors:
+
+```julia
+PPath(:a, :b)
+PPath{(:a, :b)}()
+```
+
+`PPath` objects are callable, `PPath(:a, :b)(x)` returns `x.a.b`.
+
+The property paths that a [`PropertyFunction`](@ref) may access are part of
+its type signature, `PropertyFunction{Tuple{PPath{(:a, :b)}, ...}}`.
+
+Public but not exported.
+"""
+struct PPath{path} <: _PropSelector
+    function PPath{path}() where path
+        path isa Tuple{Vararg{Symbol}} && !isempty(path) ||
+            throw(ArgumentError("The path of a PPath must be a non-empty tuple of Symbols"))
+        return new{path}()
+    end
+end
+
+PPath(path::Symbol...) = PPath{path}()
+
+@generated (::PPath{path})(x) where path = _getprop_expr(:x, path)
+
+_path(::Type{PPath{path}}) where path = path
+_path(::PPath{path}) where path = path
+
+"""
+    const PPaths = Tuple{Vararg{PPath}}
+
+The supertype of the property-path `Tuple` types used in the first type
+parameter of [`PropertyFunction`](@ref).
+
+Public but not exported.
+"""
+const PPaths = Tuple{Vararg{PPath}}
+
+_paths_type(paths) = Tuple{(PPath{p} for p in paths)...}
+_paths(::Type{Paths}) where {Paths<:PPaths} = (Paths.parameters...,)
+
+
 _is_prefix_of(a::Tuple, b::Tuple) = length(a) < length(b) && a === b[1:length(a)]
+_overlaps(a::Tuple, b::Tuple) = a === b || _is_prefix_of(a, b) || _is_prefix_of(b, a)
 
-# Drop references that are covered by a reference to a parent property:
-_merge_proprefs(refs::Vector{_PropRef}) =
-    filter(ref -> !any(other -> _is_prefix_of(other, ref), refs), refs)
+# Drop paths that are covered by a path to a parent property:
+_merge_paths(paths) = filter(p -> !any(q -> _is_prefix_of(q, p), paths), paths)
+
+function _pairwise_disjoint(paths)
+    for i in eachindex(paths), j in firstindex(paths):(i - 1)
+        _overlaps(paths[i], paths[j]) && return false
+    end
+    return true
+end
 
 
 # Property path of expressions like `a.b.c`:
@@ -51,32 +104,31 @@ end
     subst_prop_refs(expr)
 
 Replace `\$`-escaped property references in `expr` by property accesses on a
-generated argument name and return the referenced properties, the argument
-name and the modified expression.
+generated argument name and return the referenced property paths, the
+argument name and the modified expression.
 
 Usage:
 
 ```julia
-props, argsym, new_expr = subst_prop_refs(expr)
+paths, argsym, new_expr = subst_prop_refs(expr)
 ```
 """
 function subst_prop_refs(expr)
-    refs = _PropRef[]  # referenced properties, in order of first use
+    paths = Tuple{Vararg{Symbol}}[]  # referenced property paths, in order of first use
     argsym = gensym(:x)
-    new_expr = subst_prop_refs_helper(deepcopy(expr), false, refs, argsym) # Start out _not_ in a quote context (false)
-    return _merge_proprefs(refs), argsym, new_expr
+    new_expr = subst_prop_refs_helper(deepcopy(expr), false, paths, argsym) # Start out _not_ in a quote context (false)
+    return _merge_paths(paths), argsym, new_expr
 end
 
 # Modeled after Base.Base._lift_one_interp!:
 subst_prop_refs_helper(v, _, _, _) = v
 
-function subst_prop_refs_helper(expr::Expr, in_quote_context, refs, argsym)
+function subst_prop_refs_helper(expr::Expr, in_quote_context, paths, argsym)
     if !in_quote_context
         path = _dollar_path(expr)
         if !isnothing(path)
-            ref = _propref(path)
-            ref in refs || push!(refs, ref)
-            return _getprop_expr(argsym, ref)
+            path in paths || push!(paths, path)
+            return _getprop_expr(argsym, path)
         end
     end
     if expr.head === :$
@@ -94,7 +146,7 @@ function subst_prop_refs_helper(expr::Expr, in_quote_context, refs, argsym)
     in_params = expr.head === :parameters
     for (i,e) in enumerate(expr.args)
         path = in_quote_context ? nothing : _dollar_path(e)
-        new_e = subst_prop_refs_helper(e, in_quote_context, refs, argsym)
+        new_e = subst_prop_refs_helper(e, in_quote_context, paths, argsym)
         if in_params && !isnothing(path)
             # Preserve the property name of `$prop` in named-tuple/kwarg shorthand position:
             new_e = Expr(:kw, last(path), new_e)
@@ -105,27 +157,49 @@ function subst_prop_refs_helper(expr::Expr, in_quote_context, refs, argsym)
 end
 
 
+# Validates the paths in a Paths type parameter, resolved at compile time
+# so that valid constructions carry no runtime cost:
+@generated function _check_paths(::Type{Paths}) where {Paths<:PPaths}
+    paths = Any[_path(P) for P in Paths.parameters]
+    for p in paths
+        p isa Tuple{Vararg{Symbol}} && !isempty(p) ||
+            return :(throw(ArgumentError("Property paths must be non-empty tuples of Symbols")))
+    end
+    _pairwise_disjoint(paths) ||
+        return :(throw(ArgumentError("The property paths of a PropertyFunction must be pairwise disjoint")))
+    return :(nothing)
+end
+
 """
-    struct PropertyFunction <: Function
+    struct PropertyFunction{Paths<:Tuple, F<:Function} <: Function
 
 Use only for dispatch in special cases. User code should *not* create
 instances of `PropertyFunction` directly - use the [`@pf`](@ref) or
 [`@fp`](@ref) macros instead.
 
-The type parameters of `PropertyFunction` are subject to change and not
-part of the public API of the PropertyFunctions package.
+The `Paths` type parameter is a `Tuple` type of [`PPath`](@ref) types
+(`Paths <: PPaths`), e.g. `Tuple{PPath{(:a,)}, PPath{(:b, :c)}}`. It is the
+minimal cover of the property paths the function may access (a path
+subsumes all paths below it) and is part of the public API, so that
+specialized implementations (e.g. for tables with expensive column access)
+can rely on it. The paths in `Paths` must be pairwise disjoint (enforced
+during construction), and their order, while part of the type identity,
+carries no semantic meaning. The type parameter `F` is internal and
+subject to change.
 """
-struct PropertyFunction{names, F<:Function} <: Function
+struct PropertyFunction{Paths<:PPaths, F<:Function} <: Function
     sel_prop_func::F
+
+    function PropertyFunction{Paths,F}(sel_prop_func) where {Paths<:PPaths,F<:Function}
+        _check_paths(Paths)
+        return new{Paths,F}(sel_prop_func)
+    end
 end
 export PropertyFunction
 
-PropertyFunction{names}(sel_prop_func::F) where {names,F<:Function} = PropertyFunction{names,F}(sel_prop_func)
+PropertyFunction{Paths}(sel_prop_func::F) where {Paths<:PPaths,F<:Function} = PropertyFunction{Paths,F}(sel_prop_func)
 
 (pf::PropertyFunction)(x) = pf.sel_prop_func(x)
-
-_getprop_expr(base, name::Symbol) = Expr(:., base, QuoteNode(name))
-_getprop_expr(base, path::Tuple) = foldl((e, name) -> Expr(:., e, QuoteNode(name)), path, init = base)
 
 
 struct _PropGetter{name} <: Function end
@@ -150,7 +224,6 @@ required for type inference on columns that are not `StructArray`s.
 @inline subcolumn(col::AbstractArray, ::Val{name}) where name = broadcast(_PropGetter{name}(), col)
 @inline subcolumn(col::StructArray, ::Val{name}) where name = getproperty(col, name)
 
-_getcol_expr(base, name::Symbol) = Expr(:., base, QuoteNode(name))
 function _getcol_expr(base, path::Tuple)
     ref = Expr(:., base, QuoteNode(first(path)))
     for name in Base.tail(path)
@@ -159,10 +232,10 @@ function _getcol_expr(base, path::Tuple)
     return ref
 end
 
-@generated function _prop_cols(pf::PropertyFunction{names}, cols) where names
+@generated function _prop_cols(pf::PropertyFunction{Paths}, cols) where Paths
     expr = :(())
-    for ref in names
-        push!(expr.args, _getcol_expr(:cols, ref))
+    for P in Paths.parameters
+        push!(expr.args, _getcol_expr(:cols, _path(P)))
     end
     return expr
 end
@@ -170,49 +243,56 @@ end
 
 # Broadcast kernel that assembles the referenced properties into a (possibly
 # nested) NamedTuple and passes it to the wrapped function as a single argument:
-struct _PropsNTKernel{names,F<:Function} <: Function
+struct _PropsNTKernel{Paths<:PPaths,F<:Function} <: Function
     sel_prop_func::F
 end
 
-_PropsNTKernel(pf::PropertyFunction{names,F}) where {names,F} = _PropsNTKernel{names,F}(pf.sel_prop_func)
+_PropsNTKernel(pf::PropertyFunction{Paths,F}) where {Paths,F} = _PropsNTKernel{Paths,F}(pf.sel_prop_func)
 
 @inline (k::_PropsNTKernel)(args...) = k.sel_prop_func(_props_nt(k, args))
 
-function _props_nt_expr(refs::Vector, argexprs::Vector)
+function _props_nt_expr(paths::Vector, argexprs::Vector)
     ks = Symbol[]
     vs = Any[]
-    for ref in refs
-        head = _ref_head(ref)
+    for path in paths
+        head = first(path)::Symbol
         head in ks && continue
         push!(ks, head)
-        idxs = findall(r -> _ref_head(r) === head, refs)
-        if length(idxs) == 1 && refs[only(idxs)] isa Symbol
+        idxs = findall(p -> first(p) === head, paths)
+        if length(idxs) == 1 && length(paths[only(idxs)]) == 1
             push!(vs, argexprs[only(idxs)])
         else
-            subrefs = Any[_propref(Base.tail(refs[i]::Tuple{Vararg{Symbol}})) for i in idxs]
-            push!(vs, _props_nt_expr(subrefs, argexprs[idxs]))
+            subpaths = Any[Base.tail(paths[i]::Tuple{Vararg{Symbol}}) for i in idxs]
+            push!(vs, _props_nt_expr(subpaths, argexprs[idxs]))
         end
     end
     return :(NamedTuple{$(QuoteNode((ks...,)))}(($(vs...),)))
 end
 
-@generated function _props_nt(k::_PropsNTKernel{names}, args::Tuple) where names
-    refs = Any[names...]
-    argexprs = Any[:(args[$i]) for i in eachindex(refs)]
-    return _props_nt_expr(refs, argexprs)
+@generated function _props_nt(k::_PropsNTKernel{Paths}, args::Tuple) where Paths
+    paths = Any[_path(P) for P in Paths.parameters]
+    argexprs = Any[:(args[$i]) for i in eachindex(paths)]
+    return _props_nt_expr(paths, argexprs)
 end
 
 
+# Selects properties as a Tuple:
+struct _TplPropSelector{Paths<:PPaths} <: _PropSelector end
 
-struct _PropSelector{src_names, trg_names} <: Function end
+@generated function (::_TplPropSelector{Paths})(x) where Paths
+    return Expr(:tuple, (_getprop_expr(:x, _path(P)) for P in Paths.parameters)...)
+end
 
-@generated function (::_PropSelector{src_names,trg_names})(x) where {src_names,trg_names}
-    vals = Any[_getprop_expr(:x, ref) for ref in src_names]
+# Selects properties as a NamedTuple:
+struct _NTPropSelector{trg_names, Paths<:PPaths} <: _PropSelector end
+
+@generated function (::_NTPropSelector{trg_names, Paths})(x) where {trg_names, Paths}
+    vals = Any[_getprop_expr(:x, _path(P)) for P in Paths.parameters]
     return :(NamedTuple{$(QuoteNode(trg_names))}(($(vals...),)))
 end
 
 """
-    PropSelFunction{src_names,trg_names} <: PropertyFunction
+    PropSelFunction{Paths<:Tuple,trg_names} <: PropertyFunction
 
 A special kind of `PropertyFunction` that selects (and possibly renames)
 properties, but does no other computations.
@@ -227,43 +307,59 @@ or directly via
 
 ```julia
 propsel = PropSelFunction(:c, :a => :d)
+propsel = PropSelFunction(:c, PPath(:a, :b) => :d)
 ```
 
 or
 
 ```julia
-propsel = PropSelFunction{(:c, :a), (:c, :d)}()
+propsel = PropSelFunction{Tuple{PPath{(:c,)}, PPath{(:a,)}}, (:c, :d)}()
 ```
 
 or just
 
 ```julia
-PropSelFunction{(:c, :a)}()
+PropSelFunction{Tuple{PPath{(:c,)}, PPath{(:a,)}}}()
 ```
 
 if no property name mapping is required.
 
-Source names may also be paths of nested property names, e.g. in
-`@pf (;\$(a.b))`.
+The selected property paths of a `PropSelFunction` are always pairwise
+disjoint. Selections with duplicated or overlapping sources result in
+plain `PropertyFunction`s instead.
 
 See also [`@pf`](@ref).
 """
-const PropSelFunction{src_names, trg_names} = PropertyFunctions.PropertyFunction{src_names, PropertyFunctions._PropSelector{src_names, trg_names}}
+const PropSelFunction{Paths, trg_names} = PropertyFunctions.PropertyFunction{Paths, PropertyFunctions._NTPropSelector{trg_names, Paths}}
 export PropSelFunction
 
-PropSelFunction{src_names,trg_names}() where {src_names,trg_names} = PropertyFunction{src_names}(_PropSelector{src_names,trg_names}())
-PropSelFunction{src_names}() where {src_names} = PropSelFunction{src_names, src_names}()
-
-function PropSelFunction(selects::Union{Symbol,Pair{Symbol,Symbol}}...)
-    src_names = map(_propsel_src, selects)
-    trg_names = map(_propsel_trg, selects)
-    PropSelFunction{src_names, trg_names}()
+function PropSelFunction{Paths,trg_names}() where {Paths<:PPaths,trg_names}
+    trg_names isa Tuple{Vararg{Symbol}} && length(trg_names) == length(Paths.parameters) ||
+        throw(ArgumentError("The target names of a PropSelFunction must be a tuple of Symbols matching the number of source paths"))
+    allunique(trg_names) ||
+        throw(ArgumentError("The target names of a PropSelFunction must be unique"))
+    return PropertyFunction{Paths}(_NTPropSelector{trg_names,Paths}())
 end
 
-_propsel_src(s::Symbol) = s
-_propsel_trg(s::Symbol) = s
-_propsel_src(src_trg::Pair{Symbol,Symbol}) = src_trg[1]
-_propsel_trg(src_trg::Pair{Symbol,Symbol}) = src_trg[2]
+function PropSelFunction{Paths}() where {Paths<:PPaths}
+    _check_paths(Paths)
+    return PropSelFunction{Paths, _trg_names(Paths)}()
+end
+
+_trg_names(::Type{Paths}) where {Paths<:PPaths} = map(P -> last(_path(P)), _paths(Paths))
+
+function PropSelFunction(selects::Union{Symbol, PPath, Pair{<:Union{Symbol, PPath}, Symbol}}...)
+    paths = map(_sel_path, selects)
+    trg_names = map(_sel_trg, selects)
+    PropSelFunction{_paths_type(paths), trg_names}()
+end
+
+_sel_path(s::Symbol) = (s,)
+_sel_path(p::PPath) = _path(p)
+_sel_path(src_trg::Pair) = _sel_path(src_trg[1])
+_sel_trg(s::Symbol) = s
+_sel_trg(p::PPath) = last(_path(p))
+_sel_trg(src_trg::Pair) = src_trg[2]
 
 
 
@@ -299,18 +395,18 @@ example above. If the broadcasted function generates structs (including
 `NamedTuple`s), broadcasting specialization will try to return a
 `StructArrays.StructArray`.
 
-Property functions of the kind
+Expressions that purely select properties, like
 
 ```julia
 propsel = @pf (;\$c, d = \$a)
 ```
 
-(or equivalently `@pf (c = \$c, d = \$a)`)
-can be used to select (and rename) properties, and they have special
+(or equivalently `@pf (c = \$c, d = \$a)`), as well as tuple selections
+`@pf (\$c, \$a)` and single-property extractions `@pf \$a`, have special
 broadcasting optimizations for table-like arguments. This can make
-broadcasts of such property selectors zero-copy O(1) operations:
+broadcasts of such property selections zero-copy O(1) operations:
 
-```
+```julia
 new_xs = propsel.(xs)
 new_xs.c === xs.c
 new_xs.d === xs.a
@@ -329,21 +425,26 @@ end
 export @pf
 
 function _pf_impl(expr)
-    srcs_trgs = _get_property_selection(expr)
-    if !isnothing(srcs_trgs)
-        srcs, trgs = srcs_trgs
-        return :(PropSelFunction{$(Expr(:tuple, QuoteNode.(srcs)...)), $(Expr(:tuple, QuoteNode.(trgs)...))}())
+    selection = _get_property_selection(expr)
+    path = _dollar_path(expr)
+    if !isnothing(selection)
+        kind, paths, trg_names = selection
+        PathsT = _paths_type(paths)
+        if kind === :namedtuple
+            return :(PropSelFunction{$PathsT, $(QuoteNode((trg_names...,)))}())
+        else
+            return :(PropertyFunction{$PathsT}($(_TplPropSelector{PathsT})()))
+        end
+    elseif !isnothing(path)
+        return :(PropertyFunction{$(Tuple{PPath{path}})}($(PPath{path})()))
     else
-        props, argsym, arg_expr = subst_prop_refs(expr)
-
-        names_expr = :(())
-        append!(names_expr.args, map(QuoteNode, props))
+        paths, argsym, arg_expr = subst_prop_refs(expr)
 
         res_expr = quote
             local sel_prop_func
             @inline sel_prop_func($(esc(argsym))) = $(esc(arg_expr))
 
-            PropertyFunction{$names_expr}(sel_prop_func)
+            PropertyFunction{$(_paths_type(paths))}(sel_prop_func)
         end
 
         return res_expr
@@ -392,24 +493,20 @@ function _flip_dollars(expr::Expr)
     end
 end
 
-function _unpack_dollar_ref(expr)
-    path = _dollar_path(expr)
-    isnothing(path) ? nothing : _propref(path)
-end
 
 _unpack_ntelem_assignment(::Any) = nothing
 function _unpack_ntelem_assignment(expr::Expr)
     if expr.head == :kw || expr.head == :(=)
-        src = _unpack_dollar_ref(expr.args[2])
-        if !isnothing(src) && expr.args[1] isa Symbol
-            return expr.args[1]::Symbol => src
+        path = _dollar_path(expr.args[2])
+        if !isnothing(path) && expr.args[1] isa Symbol
+            return expr.args[1]::Symbol => path
         else
             return nothing
         end
     else
-        src = _unpack_dollar_ref(expr)
-        if !isnothing(src)
-            return _ref_trgname(src) => src
+        path = _dollar_path(expr)
+        if !isnothing(path)
+            return last(path) => path
         else
             return nothing
         end
@@ -420,25 +517,30 @@ _get_property_selection(::Any) = nothing
 function _get_property_selection(expr::Expr)
     expr.head == :tuple || return nothing
     args = expr.args
+    paths = Tuple{Vararg{Symbol}}[]
+    trg_names = Symbol[]
     entries = if length(args) == 1 && args[1] isa Expr && (args[1]::Expr).head == :parameters
         (args[1]::Expr).args
     elseif !isempty(args) && all(e -> e isa Expr && e.head == :(=), args)
         args
+    elseif !isempty(args) && all(e -> !isnothing(_dollar_path(e)), args)
+        for e in args
+            push!(paths, _dollar_path(e))
+        end
+        return _pairwise_disjoint(paths) ? (:tuple, paths, trg_names) : nothing
     else
         return nothing
     end
-    inputs = _PropRef[]
-    output = Symbol[]
     for arg in entries
-        src_trg = _unpack_ntelem_assignment(arg)
-        if isnothing(src_trg)
+        trg_path = _unpack_ntelem_assignment(arg)
+        if isnothing(trg_path)
             return nothing
         else
-            push!(output, src_trg[1])
-            push!(inputs, src_trg[2])
+            push!(trg_names, trg_path[1])
+            push!(paths, trg_path[2])
         end
     end
-    return inputs => output
+    return _pairwise_disjoint(paths) ? (:namedtuple, paths, trg_names) : nothing
 end
 
 
@@ -454,7 +556,7 @@ _colaccess(xs) = Val(Tables.columnaccess(xs))
 end
 
 # A property function that references no properties has no columns to broadcast over:
-@inline Broadcast.broadcasted(pf::PropertyFunction{()}, xs::AbstractArray) =
+@inline Broadcast.broadcasted(pf::PropertyFunction{Tuple{}}, xs::AbstractArray) =
     _broadcasted_impl(Val(false), pf, xs)
 
 @inline function _broadcasted_impl(::Val{true}, pf::PropertyFunction, xs::AbstractArray)
@@ -463,7 +565,15 @@ end
     Broadcast.broadcasted(bstyle, _PropsNTKernel(pf), cols...)
 end
 
-@inline function _broadcasted_impl(::Val{true}, pf::PropSelFunction{src_names,trg_names}, xs::AbstractArray) where {src_names,trg_names}
+# Pure property selections broadcast as zero-copy column selections:
+
+@inline _broadcasted_impl(::Val{true}, pf::PropertyFunction{Paths, <:PPath}, xs::AbstractArray) where {Paths<:PPaths} =
+    only(_prop_cols(pf, Tables.columns(xs)))
+
+@inline _broadcasted_impl(::Val{true}, pf::PropertyFunction{Paths, <:_TplPropSelector}, xs::AbstractArray) where {Paths<:PPaths} =
+    StructArray(_prop_cols(pf, Tables.columns(xs)))
+
+@inline function _broadcasted_impl(::Val{true}, pf::PropSelFunction{Paths,trg_names}, xs::AbstractArray) where {Paths<:PPaths,trg_names}
     cols = _prop_cols(pf, Tables.columns(xs))
     named_cols = NamedTuple{trg_names}(cols)
     ctor = Tables.materializer(xs)
