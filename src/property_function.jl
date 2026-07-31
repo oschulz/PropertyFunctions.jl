@@ -275,6 +275,32 @@ end
     return _props_nt_expr(paths, argexprs)
 end
 
+# Zero-copy nested StructArray of the referenced property columns, structured
+# like the NamedTuple that _PropsNTKernel passes to the wrapped function:
+function _props_sa_expr(paths::Vector, argexprs::Vector)
+    ks = Symbol[]
+    vs = Any[]
+    for path in paths
+        head = first(path)::Symbol
+        head in ks && continue
+        push!(ks, head)
+        idxs = findall(p -> first(p) === head, paths)
+        if length(idxs) == 1 && length(paths[only(idxs)]) == 1
+            push!(vs, argexprs[only(idxs)])
+        else
+            subpaths = Any[Base.tail(paths[i]::Tuple{Vararg{Symbol}}) for i in idxs]
+            push!(vs, _props_sa_expr(subpaths, argexprs[idxs]))
+        end
+    end
+    return :(StructArray(NamedTuple{$(QuoteNode((ks...,)))}(($(vs...),))))
+end
+
+@generated function _props_structarray(k::_PropsNTKernel{Paths}, cols::Tuple) where Paths
+    paths = Any[_path(P) for P in Paths.parameters]
+    argexprs = Any[:(cols[$i]) for i in eachindex(paths)]
+    return _props_sa_expr(paths, argexprs)
+end
+
 
 # Selects properties as a Tuple:
 struct _TplPropSelector{Paths<:PPaths} <: _PropSelector end

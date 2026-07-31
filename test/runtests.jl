@@ -9,6 +9,9 @@ Test.@testset "Package PropertyFunctions" begin
     include("test_filterby.jl")
     include("test_sortby.jl")
     include("test_innermerge.jl")
+    if get(ENV, "PROPERTYFUNCTIONS_TEST_REACTANT", "false") == "true"
+        include("test_reactant_ext.jl")
+    end
     include("test_docs.jl")
     Test.@test isempty(Test.detect_ambiguities(PropertyFunctions))
 end # testset
