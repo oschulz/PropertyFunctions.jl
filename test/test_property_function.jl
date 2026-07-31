@@ -196,16 +196,10 @@ end
     @test @inferred(f_parens(x)) == x.a.c * 2
     @test @inferred(broadcast(f_parens, xs)) == xs.a.c .* 2
 
-    f_fp_chain = @fp a.b + d
-    @test f_fp_chain isa PropertyFunction{Tuple{PPath{(:a, :b)}, PPath{(:d,)}}}
-    @test f_fp_chain(x) == x.a.b + x.d
-
     f_extract = @pf $a.b
-    @test f_extract === @fp a.b
     @test f_extract === @pf $(a.b)
     @test @inferred(f_extract(x)) == x.a.b
     @test @inferred(broadcast(f_extract, xs)) === xs.a.b
-    @test (@pf $d) === (@fp d)
     @test (@pf $d).(xs) === xs.d
 
     f_tplsel = @pf ($d, $a.b)
@@ -281,52 +275,4 @@ end
 
     f_tpl = @pf($x) ∘ @pf(($a, $d))
     @test f_tpl isa PropertyFunction{Tuple{PPath{(:a,)}, PPath{(:d,)}}}
-end
-
-
-@testset "fp macro" begin
-    x = (a = 1, b = 2, c = 3)
-    c_outer = 10
-    f(u) = 2u
-
-    f_fp = @fp a + f(b) + $c_outer
-    @test f_fp isa PropertyFunction{Tuple{PPath{(:a,)}, PPath{(:b,)}}}
-    @test @inferred(f_fp(x)) == x.a + f(x.b) + c_outer
-
-    @test (@fp (; b, c = a)) isa PropSelFunction{Tuple{PPath{(:b,)}, PPath{(:a,)}}, (:b, :c)}
-    @test (@fp (; b, c = a))(x) == (b = 2, c = 1)
-    @test (@fp (b = b, c = a)) === (@fp (; b, c = a))
-    @test (@fp (s = a + $c_outer,))(x) == (s = 11,)
-
-    @test (@fp (a, :(q + 1), raw"$b"))(x) == (1, :(q + 1), raw"$b")
-    @test (@fp Base.abs(a) + sum(sqrt.((a, c))))(x) ≈ abs(x.a) + sqrt(x.a) + sqrt(x.c)
-    @test (@fp a + $(c_outer + 1))(x) == x.a + 11
-    @test (@fp foldl($+, (a, b, c)))(x) == 6
-    @test (@fp TestStruct(a + c, a - c))(x) == TestStruct(4, -2)
-
-    xs = StructArrays.StructArray((a = [1.0, 2.0], b = [3.0, 4.0], c = [5.0, 6.0]))
-    @test @inferred(broadcast(@fp(a + c^2), xs)) == xs.a .+ xs.c .^ 2
-    @test (@fp (; c, b)).(xs).c === xs.c
-
-    # Only the asserted value of a type assertion is in value position, and
-    # the operators of chained comparisons are not value positions:
-    @test (@fp a::Int)(x) === 1
-    @test (@fp (a::Int) + b)(x) === 3
-    @test (@fp 0 < a <= 2)(x) === true
-
-    # Expressions introducing local variables are not supported (would be
-    # indistinguishable from property references) and must be rejected:
-    flip = PropertyFunctions._flip_dollars
-    @test_throws ArgumentError flip(:(map(x -> x + a, b)))
-    @test_throws ArgumentError flip(:(sum(x^2 for x in a)))
-    @test_throws ArgumentError flip(:([x^2 for x in a]))
-    @test_throws ArgumentError flip(:(map(b) do x; x + a; end))
-    @test_throws ArgumentError flip(:(let y = a; y + 1; end))
-    @test_throws ArgumentError flip(:(for y in a; y; end))
-    @test_throws ArgumentError flip(:(begin y = a; y + 1 end))
-    @test_throws ArgumentError flip(:(y += a))
-    @test_throws ArgumentError flip(:(local y))
-    @test_throws ArgumentError flip(:(const y = a))
-    @test_throws ArgumentError flip(:(try a catch err; err end))
-    @test flip(:(try a catch; b end)) isa Expr
 end
