@@ -1,20 +1,13 @@
 # This file is a part of PropertyFunctions.jl, licensed under the MIT License (MIT).
 
-# Tests for the Reactant extension. Reactant is too heavy for the default
-# test matrix, so this file only runs when PROPERTYFUNCTIONS_TEST_REACTANT
-# is set (see the "Reactant extension" CI job), and adds Reactant to the
-# test environment on demand.
-
-import Pkg
-if isnothing(Base.find_package("Reactant"))
-    Pkg.add("Reactant")
-end
-
 using PropertyFunctions
 using Test
 
 using StructArrays
 using Reactant
+
+# CPU is available everywhere and sufficient to test tracing compatibility:
+Reactant.set_default_backend("cpu")
 
 @testset "reactant_ext" begin
     reactant_ext = Base.get_extension(PropertyFunctions, :PropertyFunctionsReactantExt)
