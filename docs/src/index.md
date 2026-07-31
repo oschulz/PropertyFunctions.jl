@@ -12,4 +12,6 @@ The package also provides convenience functions [`sortby`](@ref) and [`filterby`
 
 Property functions can be used with `map` and `filter` directly and get the same column-access optimizations there as in broadcasting.
 
+Function composition `f ∘ pf` with a property function as the inner function results in a property function again, and compositions of pure property selections fuse into single selections.
+
 When [Accessors.jl](https://github.com/JuliaObjects/Accessors.jl) is loaded, optics like `@o _.a.b` can be converted to property functions via `PropertyFunction(optic)`, and `Accessors.set` works with pure property extractions and selections.

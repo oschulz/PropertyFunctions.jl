@@ -579,6 +579,61 @@ end
 
 
 
+Base.:∘(p2::PPath, p1::PPath) = PPath{(_path(p1)..., _path(p2)...)}()
+
+"""
+    fg = f ∘ pf::PropertyFunction
+
+Function composition with a property function as the inner function
+results in a `PropertyFunction` again, since `fg` accesses the same
+properties as `pf`.
+
+Compositions of pure property selections and extractions fuse into single
+selections that may access fewer and more specific properties, e.g.
+`@pf(\$x) ∘ @pf((; x = \$a.b, y = \$c)) === @pf \$a.b`.
+"""
+Base.:∘(f, pf::PropertyFunction{Paths}) where {Paths<:PPaths} =
+    PropertyFunction{Paths}(f ∘ pf.sel_prop_func)
+
+@generated function Base.:∘(
+    pf2::PropertyFunction{Paths2,F2}, pf1::PropertyFunction{Paths1,F1}
+) where {Paths2<:PPaths,F2<:_PropSelector,Paths1<:PPaths,F1<:_PropSelector}
+    fused = _fused_selection_expr(F2, F1)
+    isnothing(fused) && return :(PropertyFunction{$Paths1}(pf2.sel_prop_func ∘ pf1.sel_prop_func))
+    return fused
+end
+
+# Resolves a path into the output of a selector to a path into its input,
+# returns nothing where impossible:
+_resolve_path(::Type{PPath{q}}, path::Tuple) where q = (q..., path...)
+_resolve_path(::Type{<:_TplPropSelector}, ::Tuple) = nothing
+function _resolve_path(::Type{_NTPropSelector{trg_names,Paths}}, path::Tuple) where {trg_names,Paths}
+    isempty(path) && return nothing
+    i = findfirst(==(first(path)), trg_names)
+    isnothing(i) && return nothing
+    return (_path(Paths.parameters[i])..., Base.tail(path)...)
+end
+
+_selector_paths(::Type{PPath{path}}) where path = Any[path]
+_selector_paths(::Type{_TplPropSelector{Paths}}) where {Paths} = Any[_path(P) for P in Paths.parameters]
+_selector_paths(::Type{_NTPropSelector{trg_names,Paths}}) where {trg_names,Paths} = Any[_path(P) for P in Paths.parameters]
+
+function _fused_selection_expr(::Type{F2}, ::Type{F1}) where {F2<:_PropSelector,F1<:_PropSelector}
+    resolved = [_resolve_path(F1, path) for path in _selector_paths(F2)]
+    any(isnothing, resolved) && return nothing
+    # Disjoint selector sources stay disjoint under path resolution:
+    @assert _pairwise_disjoint(resolved)
+    PathsT = _paths_type(resolved)
+    if F2 <: PPath
+        return :(PropertyFunction{$PathsT}($(PPath{only(resolved)})()))
+    elseif F2 <: _NTPropSelector
+        return :(PropSelFunction{$PathsT, $(QuoteNode(F2.parameters[1]))}())
+    else
+        return :(PropertyFunction{$PathsT}($(_TplPropSelector{PathsT})()))
+    end
+end
+
+
 # ToDo - necessary?
 #@inline (bpf::BroadcastFunction{<:PropertyFunction})(tbl) =
 #    broadcast(_PropsNTKernel(bpf.f), _prop_cols(bpf.f, Tables.columns(tbl))...)

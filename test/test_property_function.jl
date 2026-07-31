@@ -247,6 +247,43 @@ end
 end
 
 
+@testset "composition" begin
+    inner = StructArrays.StructArray((b = [1.0, 2.0, 3.0], c = [4.0, 5.0, 6.0]))
+    xs = StructArrays.StructArray((a = inner, d = [7.0, 8.0, 9.0]))
+    x = xs[1]
+
+    @test PPath(:b) ∘ PPath(:a) === PPath(:a, :b)
+
+    f_c = exp ∘ @pf($a.b + $d)
+    @test f_c isa PropertyFunction{Tuple{PPath{(:a, :b)}, PPath{(:d,)}}}
+    @test @inferred(f_c(x)) == exp(x.a.b + x.d)
+    @test @inferred(broadcast(f_c, xs)) == exp.(xs.a.b .+ xs.d)
+
+    f_c2 = log ∘ f_c
+    @test f_c2 isa PropertyFunction{Tuple{PPath{(:a, :b)}, PPath{(:d,)}}}
+    @test @inferred(f_c2(x)) ≈ x.a.b + x.d
+
+    sel1 = @pf (; x = $a.b, y = $d)
+    @test @inferred(@pf($x) ∘ sel1) === @pf $a.b
+    @test @inferred(@pf((; u = $x, v = $y)) ∘ sel1) === @pf (; u = $a.b, v = $d)
+    @test @inferred(@pf(($y, $x)) ∘ sel1) === @pf ($d, $a.b)
+    @test (@pf $x.c) ∘ @pf((; x = $a)) === @pf $a.c
+    @test (@pf $b) ∘ @pf($a) === @pf $a.b
+    @test ((@pf $x) ∘ sel1).(xs) === xs.a.b
+
+    f_pfpf = @pf($q + 1) ∘ @pf((; q = $a.b))
+    @test f_pfpf isa PropertyFunction{Tuple{PPath{(:a, :b)}}}
+    @test @inferred(f_pfpf(x)) == x.a.b + 1
+
+    f_bad = @pf($z) ∘ @pf((; x = $a))
+    @test f_bad isa PropertyFunction{Tuple{PPath{(:a,)}}}
+    @test_throws Exception f_bad(x)
+
+    f_tpl = @pf($x) ∘ @pf(($a, $d))
+    @test f_tpl isa PropertyFunction{Tuple{PPath{(:a,)}, PPath{(:d,)}}}
+end
+
+
 @testset "fp macro" begin
     x = (a = 1, b = 2, c = 3)
     c_outer = 10
