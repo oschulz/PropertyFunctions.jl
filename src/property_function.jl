@@ -359,8 +359,9 @@ PropSelFunction{Tuple{PPath{(:c,)}, PPath{(:a,)}}}()
 if no property name mapping is required.
 
 The selected property paths of a `PropSelFunction` are always pairwise
-disjoint. Selections with duplicated or overlapping sources result in
-plain `PropertyFunction`s instead.
+disjoint: [`@pf`](@ref) generates plain `PropertyFunction`s for
+selections with duplicated or overlapping sources, while the
+`PropSelFunction` constructors reject such selections.
 
 See also [`@pf`](@ref).
 """
