@@ -16,6 +16,17 @@ struct TestStruct{T}
 end
 
 
+# A non-callable model type participating in input calls f(_) via the
+# input_property_paths/call_on interface, with a positional-style body:
+struct PFTestModel
+    offset::Float64
+end
+PropertyFunctions.input_property_paths(::PFTestModel) = (PPath(:mu), PPath(:sigma))
+PropertyFunctions.call_on(m::PFTestModel, x) = m.offset + x.mu * x.sigma
+
+_take_last(ex) = ex.args[end]
+
+
 @testset "ppath" begin
     x = (a = (b = 1, c = 2), d = 3)
 
@@ -132,6 +143,126 @@ end
     @test map(f_nt, xs_sa) isa StructArray
     @test map(f_propsel, xs_sa).b === xs_sa.b
     @test filter(@pf(42 > 0), BitVector([true, false])) == [true, false]
+end
+
+
+@testset "input calls" begin
+    x = (a = 2.0, mu = 3.0, sigma = 0.5)
+    f = @pf $mu * $sigma
+
+    make_g(f) = @pf $a + f(_)
+    g = @inferred make_g(f)
+    @test g isa PropertyFunction{Tuple{PPath{(:a,)}, PPath{(:mu,)}, PPath{(:sigma,)}}}
+    @test @inferred(g(x)) == x.a + x.mu * x.sigma
+
+    xs = StructArrays.StructArray((
+        a = [2.0, 3.0], mu = [1.0, 2.0], sigma = [0.5, 0.25], unused = [0, 0]
+    ))
+    @test @inferred(broadcast(g, xs)) == xs.a .+ xs.mu .* xs.sigma
+
+    # Overlapping properties merge into the minimal cover:
+    g_dedup = @pf $mu + f(_)
+    @test g_dedup isa PropertyFunction{Tuple{PPath{(:mu,)}, PPath{(:sigma,)}}}
+    @test g_dedup(x) == x.mu + x.mu * x.sigma
+
+    xn = (a = (b = 1, c = 2), d = 3)
+    f_nested = @pf $a.b + $d
+    # Paths of the expression itself come first, then input-call paths:
+    g_nested = @pf f_nested(_) - $(a.c)
+    @test g_nested isa PropertyFunction{Tuple{PPath{(:a, :c)}, PPath{(:a, :b)}, PPath{(:d,)}}}
+    @test g_nested(xn) == xn.a.b + xn.d - xn.a.c
+    g_cover = @pf ($a, f_nested(_))
+    @test g_cover isa PropertyFunction{Tuple{PPath{(:a,)}, PPath{(:d,)}}}
+    @test g_cover(xn) == (xn.a, f_nested(xn))
+
+    # PPath callees:
+    p = PPath(:mu)
+    g_ppath = @pf p(_) + $a
+    @test g_ppath isa PropertyFunction{Tuple{PPath{(:a,)}, PPath{(:mu,)}}}
+    @test g_ppath(x) == x.mu + x.a
+
+    # Quote interpolation inside a callee is evaluated at hoist time,
+    # non-colliding names are fine:
+    @test (@pf _take_last(quote $f end)(_)) === f
+
+    # An input call as the entire expression short-circuits, PPath callees
+    # keep the zero-copy broadcast optimization:
+    @test (@pf f(_)) === f
+    @test (@pf p(_)) isa PropertyFunction{Tuple{PPath{(:mu,)}}, PPath{(:mu,)}}
+    @test (@pf p(_)).(xs) === xs.mu
+
+    # _ in binding positions stays available:
+    @test (@pf (_ -> $a)(nothing))(x) == x.a
+    @test (@pf sum($a for _ in 1:3))(x) == 3 * x.a
+
+    # Other function-like types participate via input_property_paths/call_on:
+    m = PFTestModel(10.0)
+    pf_m = @pf m(_)
+    @test pf_m isa PropertyFunction{Tuple{PPath{(:mu,)}, PPath{(:sigma,)}}}
+    @test pf_m(x) == 10.0 + x.mu * x.sigma
+    @test (@pf $a * m(_))(x) == x.a * (10.0 + x.mu * x.sigma)
+
+    # Callee expressions are evaluated once, at construction:
+    cnt = Ref(0)
+    counting_f() = (cnt[] += 1; f)
+    g_cnt = @pf counting_f()(_) + $a
+    @test cnt[] == 1
+    @test g_cnt(x) == f(x) + x.a
+    @test cnt[] == 1
+
+    # Functions without input_property_paths are rejected at construction:
+    @test_throws ArgumentError @pf $a + sin(_)
+
+    # Input-call callees are hoisted out and evaluated at construction, so
+    # callees that use names bound inside the expression must be rejected
+    # (issue found in review):
+    g_local = @pf begin s = f(_); s + $a end
+    @test g_local isa PropertyFunction{Tuple{PPath{(:a,)}, PPath{(:mu,)}, PPath{(:sigma,)}}}
+    @test g_local(x) == f(x) + x.a
+
+    # Input calls are discovered through quote interpolations, quoted
+    # macro calls are inert data, but their quote interpolations are live:
+    @test (@pf :($(f(_))))(x) == f(x)
+    q_and_m = @pf (f(_), :(@somemacro 1))
+    @test q_and_m(x)[1] == f(x)
+    q_m_interp = @pf (f(_), :(@somemacro $(1 + 1)))
+    @test q_m_interp(x)[1] == f(x)
+
+    # Quote interpolation is depth-sensitive, a single $ inside nested
+    # quotes only unquotes one level, so input calls only activate at
+    # quote depth zero:
+    g_nested_inert = @pf quote quote $(f(_)) end end
+    @test g_nested_inert isa PropertyFunction{Tuple{}}
+    @test g_nested_inert(x) isa Expr
+    g_nested_active = @pf quote quote $$(f(_)) end end
+    @test g_nested_active isa PropertyFunction{Tuple{PPath{(:mu,)}, PPath{(:sigma,)}}}
+    @test g_nested_active(x) isa Expr
+
+    # Invalid input-call callees are rejected at macro expansion:
+    for bad_expr in [
+        raw"@pf $f(_)",
+        raw"@pf f(_)(_)",
+        raw"@pf let f = inner; f(_) end",
+        raw"@pf begin f = inner; f(_) end",
+        raw"@pf (f -> f(_))(g)",
+        raw"@pf quote $(let f = inner; f(_) end) end",
+        raw"@pf quote quote $$(let f = inner; f(_) end) end end",
+        raw"@pf f(_) + @show($a)",
+        raw"@pf begin f = inner; unquote_last(quote $f end)(_) end",
+        raw"@pf (@somemacro())(_)",
+        raw"@pf begin quote @somemacro $(f = inner) end; f(_) end",
+    ]
+        err = try macroexpand(@__MODULE__, Meta.parse(bad_expr)) catch e; e; end
+        err isa LoadError && (err = err.error)
+        @test err isa ArgumentError
+    end
+
+    # Other rvalue uses of _ are rejected by Julia itself:
+    for bad_expr in [raw"@pf _", raw"@pf $a + _", raw"@pf f(_, 1)"]
+        err = try Core.eval(@__MODULE__, Meta.parse(bad_expr)) catch e; e; end
+        err isa LoadError && (err = err.error)
+        @test err isa ErrorException
+    end
 end
 
 
