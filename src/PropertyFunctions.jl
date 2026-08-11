@@ -19,6 +19,6 @@ include("sortby.jl")
 include("innermerge.jl")
 include("property_function.jl")
 
-VERSION >= v"1.11" && eval(Meta.parse("public PPath, PPaths, subcolumn, input_property_paths, call_on"))
+VERSION >= v"1.11" && eval(Meta.parse("public PPath, PPaths, subcolumn, input_property_paths"))
 
 end # module

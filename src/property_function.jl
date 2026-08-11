@@ -207,8 +207,8 @@ end
     subst_prop_refs(expr)
 
 Replace `\$`-escaped property references in `expr` by property accesses on a
-generated argument name, and input calls `f(_)` by [`call_on`](@ref) calls
-on generated callee names. Returns the referenced property paths, the
+generated argument name, and input calls `f(_)` by calls of generated
+callee names. Returns the referenced property paths, the
 argument name, the input-call callees and the modified expression.
 
 Usage:
@@ -254,7 +254,7 @@ function subst_prop_refs_helper(expr::Expr, quote_depth::Int, paths, argsym, cal
             _check_input_callee(callee)
             fsym = gensym(:f)
             push!(callees, fsym => callee)
-            return :($call_on($fsym, $argsym))
+            return :($fsym($argsym))
         end
     end
     if expr.head === :$
@@ -300,7 +300,7 @@ end
 end
 
 """
-    struct PropertyFunction{Paths<:Tuple, F<:Function} <: Function
+    struct PropertyFunction{Paths<:Tuple, F} <: Function
 
 Use only for dispatch in special cases. User code should *not* create
 instances of `PropertyFunction` directly - use the [`@pf`](@ref) macro
@@ -316,17 +316,17 @@ during construction), and their order, while part of the type identity,
 carries no semantic meaning. The type parameter `F` is internal and
 subject to change.
 """
-struct PropertyFunction{Paths<:PPaths, F<:Function} <: Function
+struct PropertyFunction{Paths<:PPaths, F} <: Function
     sel_prop_func::F
 
-    function PropertyFunction{Paths,F}(sel_prop_func) where {Paths<:PPaths,F<:Function}
+    function PropertyFunction{Paths,F}(sel_prop_func) where {Paths<:PPaths,F}
         _check_paths(Paths)
         return new{Paths,F}(sel_prop_func)
     end
 end
 export PropertyFunction
 
-PropertyFunction{Paths}(sel_prop_func::F) where {Paths<:PPaths,F<:Function} = PropertyFunction{Paths,F}(sel_prop_func)
+PropertyFunction{Paths}(sel_prop_func::F) where {Paths<:PPaths,F} = PropertyFunction{Paths,F}(sel_prop_func)
 
 (pf::PropertyFunction)(x) = pf.sel_prop_func(x)
 
@@ -334,12 +334,11 @@ PropertyFunction{Paths}(sel_prop_func::F) where {Paths<:PPaths,F<:Function} = Pr
 """
     PropertyFunctions.input_property_paths(f)::Tuple{Vararg{PPath}}
 
-Return the property paths that the function `f` may access on its input
-when called via [`PropertyFunctions.call_on`](@ref).
+Return the property paths that the function `f` may access on its input.
 
-Defined for `PropertyFunction` and [`PPath`](@ref). Specialize it, together
-with [`call_on`](@ref), to make other callable types usable in `f(_)` calls
-inside of [`@pf`](@ref).
+Defined for `PropertyFunction` and [`PPath`](@ref). Specialize it to make
+other callable types usable in `f(_)` calls inside of [`@pf`](@ref), such
+types must be callable with the input object as their argument.
 """
 function input_property_paths end
 
@@ -352,20 +351,6 @@ input_property_paths(@nospecialize(f)) = throw(ArgumentError(
 end
 
 input_property_paths(p::PPath) = (p,)
-
-
-"""
-    PropertyFunctions.call_on(f, x)
-
-Call the function `f` on the input object `x`, accessing only the
-properties given by [`PropertyFunctions.input_property_paths(f)`](@ref).
-
-See also [`PropertyFunctions.input_property_paths`](@ref).
-"""
-function call_on end
-
-@inline call_on(f::PropertyFunction, x) = f(x)
-@inline call_on(p::PPath, x) = p(x)
 
 
 # Computes the merged cover of several path tuples as a Paths type
@@ -383,7 +368,7 @@ end
 # zero-copy broadcast optimizations for pure property extractions:
 _input_call_pf(pf::PropertyFunction) = pf
 _input_call_pf(p::PPath{path}) where path = PropertyFunction{Tuple{PPath{path}}}(p)
-_input_call_pf(f) = PropertyFunction{_combined_paths_type(input_property_paths(f))}(Base.Fix1(call_on, f))
+_input_call_pf(f) = PropertyFunction{_combined_paths_type(input_property_paths(f))}(f)
 
 
 struct _PropGetter{name} <: Function end
@@ -427,7 +412,7 @@ end
 
 # Broadcast kernel that assembles the referenced properties into a (possibly
 # nested) NamedTuple and passes it to the wrapped function as a single argument:
-struct _PropsNTKernel{Paths<:PPaths,F<:Function} <: Function
+struct _PropsNTKernel{Paths<:PPaths,F} <: Function
     sel_prop_func::F
 end
 
@@ -643,8 +628,7 @@ g = @pf \$a * f(_)
 The properties accessed by `f` then count as accessed by `g` as well, so
 broadcasting `g` reads only the columns `a`, `mu` and `sigma`. The callee
 is evaluated once, when the property function is constructed, and so must
-not depend on names bound inside the expression. See also
-[`PropertyFunctions.call_on`](@ref).
+not depend on names bound inside the expression.
 
 `@pf` is also very handy in `sortby` and `filterby`:
 

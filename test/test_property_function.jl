@@ -16,13 +16,13 @@ struct TestStruct{T}
 end
 
 
-# A non-callable model type participating in input calls f(_) via the
-# input_property_paths/call_on interface, with a positional-style body:
+# A model type participating in input calls f(_) via input_property_paths,
+# callable on the input object:
 struct PFTestModel
     offset::Float64
 end
 PropertyFunctions.input_property_paths(::PFTestModel) = (PPath(:mu), PPath(:sigma))
-PropertyFunctions.call_on(m::PFTestModel, x) = m.offset + x.mu * x.sigma
+(m::PFTestModel)(x) = m.offset + x.mu * x.sigma
 
 _take_last(ex) = ex.args[end]
 
@@ -195,10 +195,12 @@ end
     @test (@pf (_ -> $a)(nothing))(x) == x.a
     @test (@pf sum($a for _ in 1:3))(x) == 3 * x.a
 
-    # Other function-like types participate via input_property_paths/call_on:
+    # Other callable types participate via input_property_paths, they
+    # don't need to be Function subtypes:
     m = PFTestModel(10.0)
     pf_m = @pf m(_)
     @test pf_m isa PropertyFunction{Tuple{PPath{(:mu,)}, PPath{(:sigma,)}}}
+    @test pf_m.sel_prop_func === m
     @test pf_m(x) == 10.0 + x.mu * x.sigma
     @test (@pf $a * m(_))(x) == x.a * (10.0 + x.mu * x.sigma)
 
