@@ -15,4 +15,6 @@ Property functions can be used with `map` and `filter` directly and get the same
 
 Function composition `f ∘ pf` with a property function as the inner function results in a property function again, and compositions of pure property selections fuse into single selections. The same fusion happens in function chains built via [FunctionChains.jl](https://github.com/oschulz/FunctionChains.jl)'s `ffchain`/`ffcomp` when a property function is followed by other functions.
 
+Input properties of property functions can be fixed to specific values via `PropertyFunctions.fix_input_properties`, the fixed properties then no longer count as accessed. `PropertyFunctions.unfix_input_properties` undoes the fixing. When [PartialFunctions.jl](https://github.com/archermarx/PartialFunctions.jl) is loaded, its `$` operator can be used as well: `f $ (; a = 4.2)` is equivalent to `PropertyFunctions.fix_input_properties(f, a = 4.2)`.
+
 When [Accessors.jl](https://github.com/JuliaObjects/Accessors.jl) is loaded, optics like `@o _.a.b` can be converted to property functions via `PropertyFunction(optic)`, and `Accessors.set` works with pure property extractions and selections.

@@ -11,6 +11,7 @@ Test.@testset "Package PropertyFunctions" begin
     include("test_innermerge.jl")
     include("test_accessors_ext.jl")
     include("test_functionchains_ext.jl")
+    include("test_partialfunctions_ext.jl")
     # Reactant only supports 64-bit Linux and macOS, and some of its
     # dependencies break already during precompilation on other platforms,
     # so it can't be a static test dependency. Reactant testing stalls on

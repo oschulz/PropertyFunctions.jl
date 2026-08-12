@@ -28,8 +28,6 @@ PPath{(:a, :b)}()
 
 The property paths that a [`PropertyFunction`](@ref) may access are part of
 its type signature, `PropertyFunction{Tuple{PPath{(:a, :b)}, ...}}`.
-
-Public but not exported.
 """
 struct PPath{path} <: _PropSelector
     function PPath{path}() where path
@@ -51,8 +49,6 @@ _path(::PPath{path}) where path = path
 
 The supertype of the property-path `Tuple` types used in the first type
 parameter of [`PropertyFunction`](@ref).
-
-Public but not exported.
 """
 const PPaths = Tuple{Vararg{PPath}}
 
@@ -354,6 +350,134 @@ input_property_paths(@nospecialize(f)) = throw(ArgumentError(
 end
 
 input_property_paths(p::PPath) = (p,)
+
+
+# Presents obj with some property values replaced by fixed ones:
+struct _PropsOverlay{X, NT<:NamedTuple}
+    obj::X
+    fixed::NT
+end
+
+@inline function Base.getproperty(w::_PropsOverlay, name::Symbol)
+    fixed = getfield(w, :fixed)
+    return haskey(fixed, name) ? getproperty(fixed, name) : getproperty(getfield(w, :obj), name)
+end
+
+function Base.propertynames(w::_PropsOverlay, private::Bool = false)
+    obj_names = propertynames(getfield(w, :obj), private)
+    extra_fixed = filter(∉(obj_names), propertynames(getfield(w, :fixed)))
+    return (obj_names..., extra_fixed...)
+end
+
+struct _FixedProps{F, NT<:NamedTuple} <: Function
+    f::F
+    fixed::NT
+end
+
+@inline (g::_FixedProps)(x) = g.f(_PropsOverlay(x, g.fixed))
+
+struct _Unfixed end
+
+"""
+    PropertyFunctions.unfixed
+
+Singleton value that unfixes a fixed input property again when passed as
+its value in [`PropertyFunctions.fix_input_properties`](@ref).
+"""
+const unfixed = _Unfixed()
+
+# Drops unfixed-valued entries. Re-constructing nt ensures concrete field
+# types, so the check in _drop_unfixed_impl is fully resolved at compile
+# time even if nt originates from type-erased code:
+_drop_unfixed(nt::NamedTuple{names}) where {names} = _drop_unfixed_impl(NamedTuple{names}(Tuple(nt)))
+
+@generated function _drop_unfixed_impl(nt::NamedTuple{names,T}) where {names,T}
+    keep = [i for (i, S) in enumerate(T.parameters) if S !== _Unfixed]
+    kept_names = ([names[i] for i in keep]...,)
+    vals = Any[:(nt[$i]) for i in keep]
+    return :(NamedTuple{$(QuoteNode(kept_names))}(($(vals...),)))
+end
+
+# Keeps only the entries that are property roots in Paths, resolved at
+# compile time:
+@generated function _relevant_fixed(::Type{Paths}, nt::NamedTuple{names,T}) where {Paths<:PPaths, names, T}
+    roots = Symbol[first(_path(P)) for P in Paths.parameters]
+    keep = [i for (i, n) in enumerate(names) if n in roots]
+    kept_names = ([names[i] for i in keep]...,)
+    vals = Any[:(nt[$i]) for i in keep]
+    return :(NamedTuple{$(QuoteNode(kept_names))}(($(vals...),)))
+end
+
+# Drops the paths rooted at fixed property names, resolved at compile time:
+@generated function _paths_without(::Type{Paths}, ::Type{NT}) where {Paths<:PPaths, NT<:NamedTuple}
+    names = NT.parameters[1]
+    remaining = Any[_path(P) for P in Paths.parameters if !(first(_path(P)) in names)]
+    return _paths_type(remaining)
+end
+
+"""
+    PropertyFunctions.fix_input_properties(f::PropertyFunction; kwargs...)
+
+Fix input properties of `f` to the given values.
+
+The fixed properties no longer count as accessed by the resulting property
+function and are ignored if present in its input. Fixed values that `f`
+does not access have no effect, fixing already-fixed properties replaces
+their values, and setting a property to
+[`PropertyFunctions.unfixed`](@ref) unfixes it again.
+
+Use [`PropertyFunctions.unfix_input_properties`](@ref) to undo completely.
+
+When [PartialFunctions.jl](https://github.com/archermarx/PartialFunctions.jl)
+is loaded, `f \$ (; a = 4.2)` is equivalent to
+`fix_input_properties(f, a = 4.2)`.
+
+Example:
+
+```julia
+using PartialFunctions
+
+f = @pf \$a + \$b + \$c
+
+g = f \$ (; b = 2)
+g((a = 1, c = 3)) == 6
+g(a = 1, c = 3) == 6
+g(a = 1, b = 0, c = 3) == 6 # g ignores fixed input b
+
+# Fixing an already-fixed property replaces its fixed value:
+h = g \$ (; b = 20)
+h(a = 1, c = 3) == 24
+
+# Setting a fixed property to `unfixed` unfixes it again. Since no
+# fixed properties remain here, this returns the original function:
+h \$ (; b = PropertyFunctions.unfixed) === f
+```
+"""
+function fix_input_properties end
+
+function fix_input_properties(pf::PropertyFunction{Paths}; props...) where {Paths<:PPaths}
+    fixed = _relevant_fixed(Paths, _drop_unfixed(values(props)))
+    isempty(fixed) && return pf
+    return PropertyFunction{_paths_without(Paths, typeof(fixed))}(_FixedProps(pf, fixed))
+end
+
+# Fixed property functions stay a single layer over the original, keeping
+# unfixing exact and simple:
+function fix_input_properties(pf::PropertyFunction{<:PPaths, <:_FixedProps}; props...)
+    isempty(props) && return pf
+    g = pf.sel_prop_func
+    return fix_input_properties(g.f; _drop_unfixed(merge(g.fixed, values(props)))...)
+end
+
+"""
+    PropertyFunctions.unfix_input_properties(f::PropertyFunction)
+
+Undo [`PropertyFunctions.fix_input_properties`](@ref), returning the
+original property function. Returns `f` unchanged if no properties are
+fixed.
+"""
+unfix_input_properties(pf::PropertyFunction) = pf
+unfix_input_properties(pf::PropertyFunction{<:PPaths, <:_FixedProps}) = pf.sel_prop_func.f
 
 
 # Computes the merged cover of several path tuples as a Paths type

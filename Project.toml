@@ -9,16 +9,19 @@ Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
 [weakdeps]
 Accessors = "7d9f7c33-5ae7-4f3b-8dc6-eff91059b697"
 FunctionChains = "8e6b2b91-af83-483e-ba35-d00930e4cf9b"
+PartialFunctions = "570af359-4316-4cb7-8c74-252c00c2016b"
 Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
 
 [extensions]
 PropertyFunctionsAccessorsExt = "Accessors"
 PropertyFunctionsFunctionChainsExt = "FunctionChains"
+PropertyFunctionsPartialFunctionsExt = "PartialFunctions"
 PropertyFunctionsReactantExt = "Reactant"
 
 [compat]
 Accessors = "0.1"
 FunctionChains = "0.2.6"
+PartialFunctions = "1.1"
 Reactant = "0.2"
 StructArrays = "0.7"
 Tables = "1"

@@ -6,6 +6,7 @@ using Test
 using StructArrays
 using Base.Broadcast: broadcasted
 using PropertyFunctions: PPath
+using PropertyFunctions: fix_input_properties, unfix_input_properties, unfixed
 using SparseArrays: SparseVector
 using FillArrays: Fill
 
@@ -23,6 +24,11 @@ struct PFTestModel
 end
 PropertyFunctions.input_property_paths(::PFTestModel) = (PPath(:mu), PPath(:sigma))
 (m::PFTestModel)(x) = m.offset + x.mu * x.sigma
+
+# A callable that inspects the properties of its input:
+struct PFTestOptMu end
+PropertyFunctions.input_property_paths(::PFTestOptMu) = (PPath(:mu),)
+(f::PFTestOptMu)(x) = hasproperty(x, :mu) ? x.mu : -1
 
 _take_last(ex) = ex.args[end]
 
@@ -272,6 +278,87 @@ end
         err isa LoadError && (err = err.error)
         @test err isa ErrorException
     end
+end
+
+
+@testset "fix_input_properties" begin
+    x = (mu = 3.0, sigma = 7.0)
+    f = @pf $mu * $sigma
+
+    g = @inferred fix_input_properties(f; sigma = 0.5)
+    @test g isa PropertyFunction{Tuple{PPath{(:mu,)}}}
+    @test @inferred(g((mu = 3.0,))) == 1.5
+    @test g(mu = 3.0) == 1.5
+    @test g(x) == 1.5   # the fixed value wins over input properties
+    @test unfix_input_properties(g) === f
+    @test unfix_input_properties(f) === f
+    @test fix_input_properties(f) === f
+
+    xs = StructArrays.StructArray((mu = [1.0, 2.0],))
+    @test @inferred(broadcast(g, xs)) == xs.mu .* 0.5
+
+    # Fixed values that f doesn't access have no effect, fixing only
+    # unaccessed properties preserves f and its selector optimizations:
+    @test fix_input_properties(f; unused = 1) === f
+    f_sel = @pf $mu
+    @test fix_input_properties(f_sel; unused = 1) === f_sel
+    @test broadcast(fix_input_properties(f_sel; unused = 1), xs) === xs.mu
+    g_extra = fix_input_properties(f; sigma = 0.5, unused = 1)
+    @test g_extra isa PropertyFunction{Tuple{PPath{(:mu,)}}}
+    @test g_extra(x) == g(x)
+    @test unfix_input_properties(g_extra) === f
+
+    # Nested paths are fixed via their root property:
+    f_nested = @pf $a.b + $d
+    g_nested = fix_input_properties(f_nested; a = (b = 10,))
+    @test g_nested isa PropertyFunction{Tuple{PPath{(:d,)}}}
+    @test g_nested((d = 1,)) == 11
+
+    # Fixing all properties yields a constant property function:
+    g_const = fix_input_properties(f; mu = 2.0, sigma = 3.0)
+    @test g_const isa PropertyFunction{Tuple{}}
+    @test g_const() == 6.0
+    @test g_const((;)) == 6.0
+
+    # Fixing again replaces fixed values, stays a single layer over the
+    # original and unfixes exactly:
+    g_refix = fix_input_properties(g; sigma = 2.0)
+    @test g_refix isa PropertyFunction{Tuple{PPath{(:mu,)}}}
+    @test g_refix(mu = 3.0) == 6.0
+    @test unfix_input_properties(g_refix) === f
+    g_more = fix_input_properties(g; mu = 4.0)
+    @test g_more isa PropertyFunction{Tuple{}}
+    @test g_more() == 4.0 * 0.5
+    @test unfix_input_properties(g_more) === f
+
+    # Setting a fixed property to unfixed makes it an input again:
+    @test fix_input_properties(g; sigma = unfixed) === f
+    @test fix_input_properties(f; sigma = unfixed) === f
+    g_swap = fix_input_properties(g; mu = 4.0, sigma = unfixed)
+    @test g_swap isa PropertyFunction{Tuple{PPath{(:sigma,)}}}
+    @test g_swap(sigma = 2.0) == 8.0
+    @test unfix_input_properties(g_swap) === f
+
+    # Fixed inputs present the logical property set to callables that
+    # inspect the properties of their input:
+    f_opt = @pf PFTestOptMu()(_)
+    @test f_opt((mu = 2,)) == 2
+    @test f_opt((sigma = 1,)) == -1
+    g_opt = fix_input_properties(f_opt; mu = 3)
+    @test g_opt() == 3
+    @test g_opt((sigma = 1,)) == 3
+    w = PropertyFunctions._PropsOverlay((sigma = 2, mu = 1), (mu = 3,))
+    @test propertynames(w) == (:sigma, :mu)   # input property order is kept
+    @test hasproperty(w, :mu) && hasproperty(w, :sigma) && !hasproperty(w, :tau)
+    w_extra = PropertyFunctions._PropsOverlay((sigma = 2,), (mu = 3,))
+    @test propertynames(w_extra) == (:sigma, :mu)
+
+    # Semantics must not depend on concrete NamedTuple field types:
+    nt_unfix = NamedTuple{(:sigma,), Tuple{Any}}((unfixed,))
+    @test fix_input_properties(g; nt_unfix...) === f
+    @test fix_input_properties(f; nt_unfix...) === f
+    nt_val = NamedTuple{(:sigma,), Tuple{Any}}((0.5,))
+    @test fix_input_properties(f; nt_val...)((mu = 3.0,)) == 1.5
 end
 
 
