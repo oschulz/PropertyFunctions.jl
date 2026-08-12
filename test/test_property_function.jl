@@ -143,6 +143,13 @@ end
     @test map(f_nt, xs_sa) isa StructArray
     @test map(f_propsel, xs_sa).b === xs_sa.b
     @test filter(@pf(42 > 0), BitVector([true, false])) == [true, false]
+
+    # Property values can also be passed as keyword arguments:
+    @test @inferred(f_real(a = 0.9, c = 0.4)) == f_real_ref((a = 0.9, c = 0.4))
+    @test f_real(; a = 0.9, c = 0.4, unused = 0) == f_real_ref((a = 0.9, c = 0.4))
+    @test f_propsel(b = 1, a = 2) == (b = 1, c = 2)
+    @test (@pf $a.b + $d)(a = (b = 1,), d = 3) == 4
+    @test (@pf 42)() == 42
 end
 
 
