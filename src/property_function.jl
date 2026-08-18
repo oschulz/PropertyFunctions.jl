@@ -200,32 +200,24 @@ end
 
 
 """
-    subst_prop_refs(expr)
+    subst_prop_refs(expr, argsym::Symbol = gensym(:x))
 
-Replace `\$`-escaped property references in `expr` by property accesses on a
-generated argument name, and input calls `f(_)` by calls of generated
-callee names. Returns the referenced property paths, the
-argument name, the input-call callees and the modified expression.
-
-Usage:
-
-```julia
-paths, argsym, callees, new_expr = subst_prop_refs(expr)
-```
-
-`callees` pairs the generated name of each input-call callee with its
-expression, in order of first use, and `has_macro` indicates whether the
-expression contains macro calls outside of quote contexts.
+Replace `\$`-escaped property references in `expr` by property accesses on
+the argument name `argsym`, and input calls `f(_)` by calls of generated
+callee names.
 
 Usage:
 
 ```julia
 paths, argsym, callees, has_macro, new_expr = subst_prop_refs(expr)
 ```
+
+`callees` pairs the generated name of each input-call callee with its
+expression, in order of first use, and `has_macro` indicates whether the
+expression contains macro calls outside of quote contexts.
 """
-function subst_prop_refs(expr)
+function subst_prop_refs(expr, argsym::Symbol = gensym(:x))
     paths = Tuple{Vararg{Symbol}}[]  # referenced property paths, in order of first use
-    argsym = gensym(:x)
     callees = Pair{Symbol,Any}[]
     active_macro = Ref(false)
     new_expr = subst_prop_refs_helper(deepcopy(expr), 0, paths, argsym, callees, active_macro) # Start out at quote depth zero
@@ -298,9 +290,10 @@ end
 """
     struct PropertyFunction{Paths<:Tuple, F} <: Function
 
-Use only for dispatch in special cases. User code should *not* create
-instances of `PropertyFunction` directly - use the [`@pf`](@ref) macro
-instead.
+Create property functions with the [`@pf`](@ref) macro, or at runtime via
+the `PropertyFunction(expr, env)` constructor. Use the type itself only for
+dispatch in special cases - user code should *not* construct instances from
+a `Paths` type and a function directly.
 
 The `Paths` type parameter is a `Tuple` type of [`PPath`](@ref) types
 (`Paths <: PPaths`), e.g. `Tuple{PPath{(:a,)}, PPath{(:b, :c)}}`. It is the
@@ -773,19 +766,32 @@ macro pf(expr)
 end
 export @pf
 
-function _pf_impl(expr)
+# Pure property selections and extractions get broadcast-optimized singleton
+# implementations. Constructing them from the expression is shared between
+# the `@pf` macro path, which splices the instance into its returned
+# expression, and runtime construction, so the two cannot drift:
+function _selection_pf(@nospecialize(expr))
     selection = _get_property_selection(expr)
-    path = _dollar_path(expr)
     if !isnothing(selection)
         kind, paths, trg_names = selection
         PathsT = _paths_type(paths)
         if kind === :namedtuple
-            return :(PropSelFunction{$PathsT, $(QuoteNode((trg_names...,)))}())
+            return PropSelFunction{PathsT, (trg_names...,)}()
         else
-            return :(PropertyFunction{$PathsT}($(_TplPropSelector{PathsT})()))
+            return PropertyFunction{PathsT}(_TplPropSelector{PathsT}())
         end
-    elseif !isnothing(path)
-        return :(PropertyFunction{$(Tuple{PPath{path}})}($(PPath{path})()))
+    end
+    path = _dollar_path(expr)
+    if !isnothing(path)
+        return PropertyFunction{Tuple{PPath{path}}}(PPath{path}())
+    end
+    return nothing
+end
+
+function _pf_impl(expr)
+    sel_pf = _selection_pf(expr)
+    if !isnothing(sel_pf)
+        return :($sel_pf)
     elseif _is_input_call(expr)
         _check_input_callee(expr.args[1])
         return :($_input_call_pf($(esc(expr.args[1]))))

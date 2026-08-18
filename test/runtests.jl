@@ -6,6 +6,7 @@ import PropertyFunctions
 Test.@testset "Package PropertyFunctions" begin
     include("test_aqua.jl")
     include("test_property_function.jl")
+    include("test_runtime_construction.jl")
     include("test_filterby.jl")
     include("test_sortby.jl")
     include("test_innermerge.jl")
