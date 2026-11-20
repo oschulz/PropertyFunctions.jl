@@ -4,6 +4,7 @@ using PropertyFunctions
 using Test
 
 using StructArrays
+import TypedTables
 using Base.Broadcast: broadcasted
 using PropertyFunctions: PPath
 using PropertyFunctions: fix_input_properties, unfix_input_properties, unfixed
@@ -465,6 +466,13 @@ end
     @test PropertyFunctions.subcolumn([(b = 1,), (b = 2,)], :b) == [1, 2]
     @test PropertyFunctions.subcolumn(xs.a, Val(:b)) === xs.a.b
     @test @inferred(PropertyFunctions.subcolumn([(b = 1, c = 2.0)], Val(:c))) == [2.0]
+
+    # Other column-access tables also provide nested columns without copying:
+    tbl = TypedTables.Table(a = TypedTables.Table(b = [1.0, 2.0, 3.0], c = [4.0, 5.0, 6.0]), d = [7.0, 8.0, 9.0])
+    @test @inferred(PropertyFunctions.subcolumn(tbl.a, Val(:b))) === tbl.a.b
+    @test PropertyFunctions.subcolumn(tbl.a, :c) === tbl.a.c
+    @test @inferred(broadcast(f_extract, tbl)) === tbl.a.b
+    @test @inferred(broadcast(f_chain, tbl)) == tbl.a.b .+ tbl.d
 
     # Nested properties of a non-StructArray column with differing field types
     # are only type-stable if the property name is in the type domain:
