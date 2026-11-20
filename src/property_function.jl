@@ -495,24 +495,29 @@ struct _PropGetter{name} <: Function end
 @inline (::_PropGetter{name})(x) where name = getproperty(x, name)
 
 
+# Whether the Tables.jl columns of col are the properties of its elements.
+# Arrays like AxisKeys.KeyedArray are column-access tables as well, but their
+# rows consist of coordinates and values:
+@inline _has_element_columns(col::AbstractArray) = Tables.columnaccess(col) && Tables.rows(col) === col
+
 """
     PropertyFunctions.subcolumn(col::AbstractArray, name::Symbol)
     PropertyFunctions.subcolumn(col::AbstractArray, ::Val{name})
 
 Get the column `name` of an array `col` of structs.
 
-Returns the stored column without copying if `col` supports column access
-via Tables.jl (e.g. `StructArray`s and `TypedTables.Table`s), and
-`getproperty.(col, name)` otherwise. Specialize for other array types that
-support efficient column access.
+Returns the column itself, without copying, if `col` is a Tables.jl
+column-access table whose rows are its elements (e.g. `StructArray`s and
+`TypedTables.Table`s), and `getproperty.(col, name)` otherwise. Specialize
+for other array types that support efficient column access.
 
 The `Val` variants keep the property name in the type domain, which is
-required for type inference on columns without column access.
+required for type inference on arrays that are not such tables.
 """
 @inline subcolumn(col::AbstractArray, name::Symbol) =
-    Tables.columnaccess(col) ? Tables.getcolumn(Tables.columns(col), name) : getproperty.(col, name)
+    _has_element_columns(col) ? Tables.getcolumn(Tables.columns(col), name) : getproperty.(col, name)
 @inline subcolumn(col::AbstractArray, ::Val{name}) where name =
-    Tables.columnaccess(col) ? Tables.getcolumn(Tables.columns(col), name) : broadcast(_PropGetter{name}(), col)
+    _has_element_columns(col) ? Tables.getcolumn(Tables.columns(col), name) : broadcast(_PropGetter{name}(), col)
 
 function _getcol_expr(base, path::Tuple)
     ref = Expr(:., base, QuoteNode(first(path)))

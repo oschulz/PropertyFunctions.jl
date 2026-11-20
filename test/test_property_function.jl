@@ -4,6 +4,7 @@ using PropertyFunctions
 using Test
 
 using StructArrays
+import Tables
 import TypedTables
 using Base.Broadcast: broadcasted
 using PropertyFunctions: PPath
@@ -424,6 +425,18 @@ end
 end
 
 
+# A column-access table like AxisKeys.KeyedArray, whose rows consist of a
+# coordinate and a value:
+struct _CoordVector{T} <: AbstractVector{T}
+    data::Vector{T}
+end
+Base.size(v::_CoordVector) = size(v.data)
+Base.getindex(v::_CoordVector, i::Int) = v.data[i]
+Tables.istable(::Type{<:_CoordVector}) = true
+Tables.columnaccess(::Type{<:_CoordVector}) = true
+Tables.columns(v::_CoordVector) = (b = 10 .* eachindex(v.data), value = v.data)
+Tables.rows(v::_CoordVector) = Tables.rows(Tables.columns(v))
+
 @testset "nested properties" begin
     inner = StructArrays.StructArray((b = [1.0, 2.0, 3.0], c = [4.0, 5.0, 6.0]))
     xs = StructArrays.StructArray((a = inner, d = [7.0, 8.0, 9.0]))
@@ -468,11 +481,18 @@ end
     @test @inferred(PropertyFunctions.subcolumn([(b = 1, c = 2.0)], Val(:c))) == [2.0]
 
     # Other column-access tables also provide nested columns without copying:
-    tbl = TypedTables.Table(a = TypedTables.Table(b = [1.0, 2.0, 3.0], c = [4.0, 5.0, 6.0]), d = [7.0, 8.0, 9.0])
+    tbl = TypedTables.Table(a = TypedTables.Table(b = [1, 2, 3], c = [4.0, 5.0, 6.0]), d = [7, 8, 9])
     @test @inferred(PropertyFunctions.subcolumn(tbl.a, Val(:b))) === tbl.a.b
     @test PropertyFunctions.subcolumn(tbl.a, :c) === tbl.a.c
     @test @inferred(broadcast(f_extract, tbl)) === tbl.a.b
     @test @inferred(broadcast(f_chain, tbl)) == tbl.a.b .+ tbl.d
+
+    # But not column-access tables whose rows are not their elements:
+    coords = _CoordVector([(b = 1, c = 2.0), (b = 3, c = 4.0)])
+    @test Tables.columns(coords).b == [10, 20]
+    @test @inferred(PropertyFunctions.subcolumn(coords, Val(:b))) == [1, 3]
+    @test PropertyFunctions.subcolumn(coords, :b) == [1, 3]
+    @test @inferred(broadcast(f_chain, StructArrays.StructArray((a = coords, d = [5, 6])))) == [6, 9]
 
     # Nested properties of a non-StructArray column with differing field types
     # are only type-stable if the property name is in the type domain:
