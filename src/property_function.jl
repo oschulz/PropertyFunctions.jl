@@ -511,10 +511,8 @@ required for type inference on columns without column access.
 """
 @inline subcolumn(col::AbstractArray, name::Symbol) =
     Tables.columnaccess(col) ? Tables.getcolumn(Tables.columns(col), name) : getproperty.(col, name)
-@inline subcolumn(col::StructArray, name::Symbol) = getproperty(col, name)
 @inline subcolumn(col::AbstractArray, ::Val{name}) where name =
     Tables.columnaccess(col) ? Tables.getcolumn(Tables.columns(col), name) : broadcast(_PropGetter{name}(), col)
-@inline subcolumn(col::StructArray, ::Val{name}) where name = getproperty(col, name)
 
 function _getcol_expr(base, path::Tuple)
     ref = Expr(:., base, QuoteNode(first(path)))
