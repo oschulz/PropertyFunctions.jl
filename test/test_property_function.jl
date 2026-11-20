@@ -516,7 +516,19 @@ Tables.columns(t::_InterfaceTable) = _GetcolumnOnly(StructArrays.components(t.da
 
 @testset "column-access tables" begin
     f_sum = @pf $b + $c
+    f_extract = @pf $a.b
     f_chain = @pf $a.b + $d
+
+    # Column-access tables that are their own row iterators provide their
+    # columns without copying. Columns that are not Vectors reveal a choice
+    # of the column path that is not made at compile time:
+    for T in (StructArrays.StructArray, TypedTables.Table)
+        tbl = T((a = T((b = 1:3, c = [4.0, 5.0, 6.0])), d = [7, 8, 9]))
+        @test @inferred(PropertyFunctions.subcolumn(tbl.a, Val(:b))) === tbl.a.b
+        @test PropertyFunctions.subcolumn(tbl.a, :c) === tbl.a.c
+        @test @inferred(broadcast(f_extract, tbl)) === tbl.a.b
+        @test @inferred(broadcast(f_chain, tbl)) == tbl.a.b .+ tbl.d
+    end
 
     sa = StructArrays.StructArray((a = StructArrays.StructArray((b = [1, 2],)), d = [3, 4]))
     itbl = _InterfaceTable(sa)
@@ -526,6 +538,9 @@ Tables.columns(t::_InterfaceTable) = _GetcolumnOnly(StructArrays.components(t.da
     # TypedTables.FlexTable is not its own row iterator, but broadcasts as a
     # table that is:
     ft = TypedTables.FlexTable(a = TypedTables.FlexTable(b = [1, 2, 3], c = [4.0, 5.0, 6.0]), d = [7, 8, 9])
+    @test PropertyFunctions.subcolumn(ft.a, Val(:b)) === ft.a.b
+    @test broadcast(f_extract, ft) === ft.a.b
+    @test broadcast(f_chain, ft) == ft.a.b .+ ft.d
     @test broadcast(@pf((; $d)), ft) isa TypedTables.FlexTable
     @test broadcast(@pf((; $d)), ft).d === ft.d
 
@@ -535,6 +550,9 @@ Tables.columns(t::_InterfaceTable) = _GetcolumnOnly(StructArrays.components(t.da
     @test Tables.columns(coords).b == [10, 20]
     @test @inferred(broadcast(f_sum, coords)) == [3.0, 7.0]
     @test @inferred(broadcast(@pf($b), coords)) == [1, 3]
+    @test @inferred(PropertyFunctions.subcolumn(coords, Val(:b))) == [1, 3]
+    @test PropertyFunctions.subcolumn(coords, :b) == [1, 3]
+    @test @inferred(broadcast(f_chain, StructArrays.StructArray((a = coords, d = [5, 6])))) == [6, 9]
 end
 
 
