@@ -111,31 +111,44 @@ using PropertyFunctions: input_property_paths, fix_input_properties
         @test pf2((a = -1, b = 2)) == pf((a = -1, b = 2)) == 3
     end
 
-    @testset "generated-code cache self-heal" begin
-        RGF = PropertyFunctions.RuntimeGeneratedFunctions
-        cache = getfield(PropertyFunctions, RGF._cachename)
+    @testset "precompiled property functions" begin
+        # A package that stores runtime property functions in its precompile
+        # image, which preserves the functions, but not the generated-code
+        # cache entries of their bodies:
+        dir = mktempdir()
+        pkgname = :PrecompiledPropFuncs
+        mkpath(joinpath(dir, "$pkgname", "src"))
+        write(joinpath(dir, "$pkgname", "src", "$pkgname.jl"), """
+            module $pkgname
+            using PropertyFunctions
+            const pf = PropertyFunction(Meta.parse(raw"\$a + 100"))
+            const pf_closure = PropertyFunction(Meta.parse(raw"sum(v -> v + \$a, 1:3)"))
+            const pf_gcd = PropertyFunction(Meta.parse(raw"\$a + 200"))
+            end
+            """)
+        # The precompile image is written to the first depot:
+        pushfirst!(DEPOT_PATH, joinpath(dir, "depot"))
+        push!(LOAD_PATH, dir)
+        try
+            Core.eval(@__MODULE__, :(import $pkgname))
+        finally
+            popfirst!(DEPOT_PATH)
+            pop!(LOAD_PATH)
+        end
+        pkg = Base.invokelatest(getglobal, @__MODULE__, pkgname)
+        precompiled(name) = Base.invokelatest(getglobal, pkg, name)
 
-        # Simulate a downstream precompile image, which preserves the property
-        # function but not the generated-code cache entry:
-        pf = PropertyFunction(Meta.parse(raw"$a + 100"))
-        id = PropertyFunctions._rgf_id(pf.sel_prop_func.rgf)
-        @test haskey(cache, id)
-        delete!(cache, id)
-        @test pf((a = 1,)) == 101
+        @test precompiled(:pf)((a = 1,)) == 101
 
-        # Bodies containing closures must restore under their original id:
-        pf_clsr = PropertyFunction(Meta.parse(raw"sum(v -> v + $a, 1:3)"))
-        id_clsr = PropertyFunctions._rgf_id(pf_clsr.sel_prop_func.rgf)
-        delete!(cache, id_clsr)
-        @test pf_clsr((a = 1,)) == 9
-        @test haskey(cache, id_clsr)
+        # Bodies containing closures must be restored under their original id:
+        @test precompiled(:pf_closure)((a = 1,)) == 9
 
-        # A cache entry whose weakly referenced body has been garbage
-        # collected must self-heal as well:
-        pf_gcd = PropertyFunction(Meta.parse(raw"$a + 200"))
-        id_gcd = PropertyFunctions._rgf_id(pf_gcd.sel_prop_func.rgf)
-        cache[id_gcd] = WeakRef(nothing)
-        @test pf_gcd((a = 1,)) == 201
+        # An equal property function registers the body again, but only for
+        # as long as that function exists:
+        make_equal_pf() = (PropertyFunction(Meta.parse(raw"$a + 200")); nothing)
+        make_equal_pf()
+        GC.gc()
+        @test precompiled(:pf_gcd)((a = 1,)) == 201
     end
 
     @testset "PropertyFunction integrations" begin
