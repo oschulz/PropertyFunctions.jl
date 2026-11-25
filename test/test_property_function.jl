@@ -518,3 +518,16 @@ end
     f_tpl = @pf($x) ∘ @pf(($a, $d))
     @test f_tpl isa PropertyFunction{Tuple{PPath{(:a,)}, PPath{(:d,)}}}
 end
+
+
+@testset "loading without precompile cache" begin
+    # Generators may only call functions defined before them. Precompilation
+    # can hide violations of that rule:
+    script = raw"""
+        using PropertyFunctions, StructArrays
+        xs = StructArray((a = StructArray((b = [1, 2],)), d = [3, 4]))
+        f = @pf((; u = $x)) ∘ @pf((; x = $a.b, y = $d))
+        exit(f(xs[1]) == (u = 1,) && f.(xs).u == [1, 2] ? 0 : 1)
+        """
+    @test success(`$(Base.julia_cmd()) --compiled-modules=no --startup-file=no --project=$(Base.active_project()) -e $script`)
+end

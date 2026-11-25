@@ -907,14 +907,6 @@ selections that may access fewer and more specific properties, e.g.
 Base.:∘(f, pf::PropertyFunction{Paths}) where {Paths<:PPaths} =
     PropertyFunction{Paths}(f ∘ pf.sel_prop_func)
 
-@generated function Base.:∘(
-    pf2::PropertyFunction{Paths2,F2}, pf1::PropertyFunction{Paths1,F1}
-) where {Paths2<:PPaths,F2<:_PropSelector,Paths1<:PPaths,F1<:_PropSelector}
-    fused = _fused_selection_expr(F2, F1)
-    isnothing(fused) && return :(PropertyFunction{$Paths1}(pf2.sel_prop_func ∘ pf1.sel_prop_func))
-    return fused
-end
-
 # Resolves a path into the output of a selector to a path into its input,
 # returns nothing where impossible:
 _resolve_path(::Type{PPath{q}}, path::Tuple) where q = (q..., path...)
@@ -943,6 +935,15 @@ function _fused_selection_expr(::Type{F2}, ::Type{F1}) where {F2<:_PropSelector,
     else
         return :(PropertyFunction{$PathsT}($(_TplPropSelector{PathsT})()))
     end
+end
+
+# The functions that a generator calls must be defined before it:
+@generated function Base.:∘(
+    pf2::PropertyFunction{Paths2,F2}, pf1::PropertyFunction{Paths1,F1}
+) where {Paths2<:PPaths,F2<:_PropSelector,Paths1<:PPaths,F1<:_PropSelector}
+    fused = _fused_selection_expr(F2, F1)
+    isnothing(fused) && return :(PropertyFunction{$Paths1}(pf2.sel_prop_func ∘ pf1.sel_prop_func))
+    return fused
 end
 
 
