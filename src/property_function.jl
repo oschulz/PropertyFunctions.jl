@@ -526,7 +526,7 @@ required for type inference on columns that are not `StructArray`s.
 @inline subcolumn(col::StructArray, ::Val{name}) where name = getproperty(col, name)
 
 function _getcol_expr(base, path::Tuple)
-    ref = Expr(:., base, QuoteNode(first(path)))
+    ref = :(Tables.getcolumn($base, $(QuoteNode(first(path)))))
     for name in Base.tail(path)
         ref = :(subcolumn($ref, Val($(QuoteNode(name)))))
     end

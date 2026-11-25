@@ -497,8 +497,31 @@ Tables.columnaccess(::Type{<:_CoordVector}) = true
 Tables.columns(v::_CoordVector) = (b = 10 .* eachindex(v.data), value = v.data)
 Tables.rows(v::_CoordVector) = Tables.rows(Tables.columns(v))
 
+# A column-access table whose rows are its elements, with columns that
+# support only the accessors of the Tables.jl interface:
+struct _GetcolumnOnly{NT<:NamedTuple}
+    nt::NT
+end
+Tables.getcolumn(c::_GetcolumnOnly, name::Symbol) = getfield(c.nt, name)
+Tables.getcolumn(c::_GetcolumnOnly, i::Int) = getfield(c.nt, i)
+Tables.columnnames(c::_GetcolumnOnly) = keys(c.nt)
+
+struct _InterfaceTable{T,S<:StructArrays.StructVector{T}} <: AbstractVector{T}
+    data::S
+end
+Base.size(t::_InterfaceTable) = size(t.data)
+Base.getindex(t::_InterfaceTable, i::Int) = t.data[i]
+Tables.columnaccess(::Type{<:_InterfaceTable}) = true
+Tables.columns(t::_InterfaceTable) = _GetcolumnOnly(StructArrays.components(t.data))
+
 @testset "column-access tables" begin
     f_sum = @pf $b + $c
+    f_chain = @pf $a.b + $d
+
+    sa = StructArrays.StructArray((a = StructArrays.StructArray((b = [1, 2],)), d = [3, 4]))
+    itbl = _InterfaceTable(sa)
+    @test @inferred(broadcast(@pf($d), itbl)) === sa.d
+    @test @inferred(broadcast(f_chain, itbl)) == [4, 6]
 
     # TypedTables.FlexTable is not its own row iterator, but broadcasts as a
     # table that is:
