@@ -4,6 +4,8 @@ using PropertyFunctions
 using Test
 
 using StructArrays
+import Tables
+import TypedTables
 using Base.Broadcast: broadcasted
 using PropertyFunctions: PPath
 using PropertyFunctions: fix_input_properties, unfix_input_properties, unfixed
@@ -480,6 +482,36 @@ end
     f_overlap_sel = @pf (;$a, c = $a.c)
     @test !(f_overlap_sel isa PropSelFunction)
     @test f_overlap_sel(x) == (a = x.a, c = x.a.c)
+end
+
+
+# A column-access table like AxisKeys.KeyedArray, whose rows consist of a
+# coordinate and a value:
+struct _CoordVector{T} <: AbstractVector{T}
+    data::Vector{T}
+end
+Base.size(v::_CoordVector) = size(v.data)
+Base.getindex(v::_CoordVector, i::Int) = v.data[i]
+Tables.istable(::Type{<:_CoordVector}) = true
+Tables.columnaccess(::Type{<:_CoordVector}) = true
+Tables.columns(v::_CoordVector) = (b = 10 .* eachindex(v.data), value = v.data)
+Tables.rows(v::_CoordVector) = Tables.rows(Tables.columns(v))
+
+@testset "column-access tables" begin
+    f_sum = @pf $b + $c
+
+    # TypedTables.FlexTable is not its own row iterator, but broadcasts as a
+    # table that is:
+    ft = TypedTables.FlexTable(a = TypedTables.FlexTable(b = [1, 2, 3], c = [4.0, 5.0, 6.0]), d = [7, 8, 9])
+    @test broadcast(@pf((; $d)), ft) isa TypedTables.FlexTable
+    @test broadcast(@pf((; $d)), ft).d === ft.d
+
+    # The columns of other column-access tables are not the properties of
+    # their elements:
+    coords = _CoordVector([(b = 1, c = 2.0), (b = 3, c = 4.0)])
+    @test Tables.columns(coords).b == [10, 20]
+    @test @inferred(broadcast(f_sum, coords)) == [3.0, 7.0]
+    @test @inferred(broadcast(@pf($b), coords)) == [1, 3]
 end
 
 

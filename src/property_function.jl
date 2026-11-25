@@ -495,6 +495,18 @@ struct _PropGetter{name} <: Function end
 @inline (::_PropGetter{name})(x) where name = getproperty(x, name)
 
 
+# Whether the Tables.jl columns of xs are the properties of the elements that
+# xs broadcasts over, which requires a column-access table that is its own
+# row iterator. Arrays like AxisKeys.KeyedArray are column-access tables as
+# well, but their rows consist of coordinates and values. TypedTables.FlexTable
+# is not its own row iterator, but broadcasts as a table that is. Comparing
+# the types instead of the objects allows for resolving this at compile time,
+# and only tables with row access guarantee that Tables.rows is cheap:
+@inline function _has_element_columns(xs::AbstractArray)
+    tbl = Broadcast.broadcastable(xs)
+    return Tables.columnaccess(tbl) && Tables.rowaccess(tbl) && Tables.rows(tbl) isa typeof(tbl)
+end
+
 """
     PropertyFunctions.subcolumn(col::AbstractArray, name::Symbol)
     PropertyFunctions.subcolumn(col::AbstractArray, ::Val{name})
@@ -951,10 +963,8 @@ end
 #@inline (bpf::BroadcastFunction{<:PropertyFunction})(tbl) =
 #    broadcast(_PropsNTKernel(bpf.f), _prop_cols(bpf.f, Tables.columns(tbl))...)
 
-_colaccess(xs) = Val(Tables.columnaccess(xs))
-
 @inline function Broadcast.broadcasted(pf::PropertyFunction, xs::AbstractArray)
-    _broadcasted_impl(_colaccess(xs), pf, xs)
+    _broadcasted_impl(Val(_has_element_columns(xs)), pf, xs)
 end
 
 # A property function that references no properties has no columns to broadcast over:
