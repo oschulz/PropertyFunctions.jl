@@ -1,6 +1,6 @@
 name = "PropertyFunctions"
 uuid = "09e99361-2bb8-48a2-a80f-de58f0739eb4"
-version = "0.3.3"
+version = "0.3.4"
 
 [deps]
 RuntimeGeneratedFunctions = "7e49a35a-f44a-4d26-94aa-eba1b4ca6b47"
